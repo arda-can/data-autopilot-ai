@@ -132,7 +132,7 @@ if result.outliers:
             display_frame(pd.DataFrame([_model_dict(item) for item in result.outliers]).rename(columns={
                 "column": "Sütun", "count": "Aykırı Sayısı", "ratio": "Oran",
                 "lower_bound": "Alt Sınır", "upper_bound": "Üst Sınır",
-                "min": "En Küçük", "max": "En Büyük",
+                "min": "En Küçük", "max": "En Büyük", "method": "Yöntem",
             })),
             width="stretch",
             hide_index=True,

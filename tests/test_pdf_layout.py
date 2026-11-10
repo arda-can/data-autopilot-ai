@@ -94,8 +94,42 @@ def test_expected_range_never_goes_below_zero_for_nonnegative_columns() -> None:
         "Yaş": np.r_[rng.integers(20, 60, 298), [-5, 999]],
     })
     findings = {item.column: item for item in DataHealthAnalyzer().find_outliers(frame)}
-    assert findings["payment_installments"].lower_bound == 0
-    assert findings["ölçüm"].lower_bound == 0          # veride negatif yok
+    assert findings["payment_installments"].lower_bound >= 0
+    assert findings["ölçüm"].lower_bound >= 0         # veride negatif yok
     assert findings["kar_zarar"].lower_bound < 0       # negatif olabilen ölçü: sınır kırpılmaz
     assert findings["Yaş"].lower_bound >= 0 and findings["Yaş"].min == -5
     assert findings["Yaş"].count == 2                  # -5 artık alt sınırın dışında sayılır
+
+
+def _skewed_frame() -> pd.DataFrame:
+    rng = np.random.default_rng(5)
+    return pd.DataFrame({
+        "payment_value": np.r_[rng.lognormal(4, 1.2, 2990), [0.0] * 10],   # çarpık, negatif yok
+        "sıcaklık": rng.normal(20, 5, 3000),                                # simetrik
+        "kar_zarar": np.r_[rng.normal(0, 5, 2990), rng.normal(900, 50, 10)],  # çarpık ama negatif içerir
+        "grup": ["a", "b", "c"] * 1000,
+    })
+
+
+def test_skewed_positive_columns_use_log_scale_iqr() -> None:
+    frame = _skewed_frame()
+    assert frame["payment_value"].skew() > 2 and frame["kar_zarar"].skew() > 2
+    findings = {item.column: item for item in DataHealthAnalyzer().find_outliers(frame)}
+    log = findings["payment_value"]
+    assert log.method == "IQR (log ölçek)" and log.lower_bound >= 0
+    linear_upper = frame["payment_value"].quantile(0.75) + 1.5 * (frame["payment_value"].quantile(0.75) - frame["payment_value"].quantile(0.25))
+    assert log.upper_bound > linear_upper            # uzun kuyruk artık topluca aykırı sayılmıyor
+    assert log.ratio < 0.02
+    assert findings["kar_zarar"].method == "IQR"     # negatif içeren sütunda log uygulanmaz
+    assert all(item.method == "IQR" for name, item in findings.items() if name == "sıcaklık")
+
+
+def test_report_states_log_scale(monkeypatch: pytest.MonkeyPatch) -> None:
+    result = AutopilotEngine().run_full_autopilot(_skewed_frame())
+    report = build_report(result, "test.csv")
+    assert any("log ölçekte hesaplandı" in item for item in report.recommendations)
+    page = render_html(report, embed_plotly=False)
+    assert "IQR (log ölçek)" in page and "Yöntem" in page
+    story = _story(monkeypatch)
+    render_pdf(report)
+    assert any(text.startswith("IQR (log ölçek): çarpıklığı 2'den büyük") for text in _texts(story))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unicodedata
 
+import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 
@@ -25,6 +26,8 @@ class CategoryVariantFinding(BaseModel):
 
 
 _MAX_CATEGORY_VARIANT_VALUES = 5_000
+LOG_SCALE_SKEW = 2.0
+LOG_METHOD = "IQR (log ölçek)"
 
 _NONNEGATIVE_TOKENS = frozenset({
     "yaş", "yas", "age", "fiyat", "price", "adet", "miktar", "quantity", "qty",
@@ -75,6 +78,7 @@ class OutlierFinding(BaseModel):
     upper_bound: float
     min: float
     max: float
+    method: str = "IQR"
 
 
 class DataHealthAnalyzer:
@@ -123,11 +127,21 @@ class DataHealthAnalyzer:
             values = frame[column].dropna()
             if is_identifier_name(column) or values.nunique() < 10:
                 continue
-            q1, q3 = values.quantile([0.25, 0.75])
+            # Çok çarpık (çarpıklık > 2) ve negatif içermeyen ölçülerde doğrusal IQR kuyruğun tamamını
+            # "aykırı" sayar. Sınırlar log ölçekte (log1p; sıfırları da kapsar) hesaplanıp geri çevrilir.
+            method = "IQR"
+            scaled = values
+            if values.min() >= 0 and float(values.skew()) > LOG_SCALE_SKEW:
+                candidate = np.log1p(values)
+                if candidate.quantile(0.75) > candidate.quantile(0.25):
+                    scaled, method = candidate, LOG_METHOD
+            q1, q3 = scaled.quantile([0.25, 0.75])
             iqr = q3 - q1
             if not iqr > 0:
                 continue
             lower, upper = q1 - multiplier * iqr, q3 + multiplier * iqr
+            if method == LOG_METHOD:
+                lower, upper = float(np.expm1(lower)), float(np.expm1(upper))
             # Negatif olamayan bir ölçü için "beklenen aralık" sıfırın altına inemez: ya ad bunu söyler
             # (yaş, tutar, taksit) ya da veride hiç negatif değer yoktur.
             if lower < 0 and (is_nonnegative_name(column) or values.min() >= 0):
@@ -137,7 +151,7 @@ class DataHealthAnalyzer:
                 findings.append(OutlierFinding(
                     column=str(column), count=count, ratio=round(count / len(values), 4),
                     lower_bound=float(lower), upper_bound=float(upper),
-                    min=float(values.min()), max=float(values.max()),
+                    min=float(values.min()), max=float(values.max()), method=method,
                 ))
         return findings
 

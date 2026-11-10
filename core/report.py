@@ -19,7 +19,7 @@ from xml.sax.saxutils import escape as xml_escape
 from pydantic import BaseModel, Field
 
 from core.autopilot import AutopilotResult
-from core.health import OutlierFinding
+from core.health import LOG_METHOD, OutlierFinding
 from core.formatting import decimal_tr, integer_tr, localize_figure
 
 _PROBLEM_TYPES = {"Classification": "Sınıflandırma", "Regression": "Regresyon"}
@@ -208,6 +208,9 @@ def build_report(
             "Dağılım çarpık olabilir; bu değerler gerçek olabilir, modelleme öncesinde incelenmeli."
             if finding.ratio > 0.05 else "Veri girişi hatası olup olmadığı kontrol edilmeli."
         )
+        if finding.method == LOG_METHOD:
+            advice += " Dağılım çok çarpık olduğu için sınırlar log ölçekte hesaplandı."
+
         recommendations.append(
             f"“{finding.column}” sütununda {_int(finding.count)} şüpheli uç değer var: {' ve '.join(extremes)}. {advice}"
         )
@@ -266,10 +269,10 @@ def _tables(report: ExecutiveReport) -> dict[str, tuple[list[str], list[list[str
         )
     if report.outliers:
         tables["outliers"] = (
-            ["Sütun", "Aykırı Sayısı", "Oran", "Beklenen Aralık", "En Küçük", "En Büyük"],
+            ["Sütun", "Aykırı Sayısı", "Oran", "Beklenen Aralık", "En Küçük", "En Büyük", "Yöntem"],
             [[
                 item.column, _int(item.count), _pct(item.ratio),
-                f"{_num(item.lower_bound)} – {_num(item.upper_bound)}", _num(item.min), _num(item.max),
+                f"{_num(item.lower_bound)} – {_num(item.upper_bound)}", _num(item.min), _num(item.max), item.method,
             ] for item in report.outliers[:15]],
         )
     if report.actions:
@@ -412,6 +415,8 @@ def render_html(
         parts.append("<h3 style=\"margin-top:20px\">Temiz veride eksik değer içeren sütunlar</h3>" + _html_table(*tables["missing"]))
     if "outliers" in tables:
         parts.append("<h3 style=\"margin-top:20px\">Şüpheli uç değerler (değiştirilmedi)</h3>" + _html_table(*tables["outliers"]))
+        if any(item.method == LOG_METHOD for item in report.outliers):
+            parts.append(f'<p class="note" style="margin-top:8px">{escape(_LOG_NOTE)}</p>')
     parts.append("</section>")
 
     if "actions" in tables:
@@ -426,6 +431,10 @@ def render_html(
 
 # --- PDF -------------------------------------------------------------------------------------
 
+_LOG_NOTE = (
+    "IQR (log ölçek): çarpıklığı 2'den büyük ve negatif değer içermeyen sütunlarda beklenen aralık "
+    "log ölçekte hesaplanır; doğrusal ölçek bu sütunlarda uzun kuyruğun tamamını aykırı sayar."
+)
 _BULLET_GAP = 14  # punto; bir gövde satırı kadar. 11 ve altında pdftotext maddeleri hâlâ birleştiriyor (ölçüldü).
 
 _TURKISH_PROBE ="ğşıİĞŞöüçÖÜÇ"
@@ -608,8 +617,10 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
     if "outliers" in tables:
         story += [
             para("Şüpheli uç değerler (değiştirilmedi)", h3),
-            table(*tables["outliers"], widths=[0.26, 0.13, 0.11, 0.24, 0.13, 0.13]),
+            table(*tables["outliers"], widths=[0.24, 0.11, 0.09, 0.20, 0.10, 0.12, 0.14]),
         ]
+        if any(item.method == LOG_METHOD for item in report.outliers):
+            story.append(para(_LOG_NOTE, note))
     if report.charts:
         if figures:
             story.append(para("Öne Çıkan Grafikler", h2))
