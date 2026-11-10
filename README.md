@@ -1,5 +1,7 @@
 # 🚀 Data Autopilot AI
 
+[![CI](https://github.com/arda-can/data-autopilot-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/arda-can/data-autopilot-ai/actions/workflows/ci.yml)
+
 Bir CSV veya Excel dosyası verin; veriyi temizlesin, en anlamlı grafikleri seçsin, bir model eğitsin ve sorularınızı Türkçe yanıtlasın. Her adım deterministik, kayıt altında ve KVKK'ya duyarlı.
 
 ## Neyi farklı yapıyor
@@ -37,6 +39,8 @@ pytest
 ```
 
 Testler `tests/fixtures/` altındaki sentetik veriyle çalışır; Olist dosyalarına ihtiyaç duymaz.
+
+Testler API anahtarı kullanmaz: kurallı yerel planlayıcı, maskeleme ve LLM'e gidecek istem metni test edilir, ancak Gemini'ye yapılan gerçek çağrı test kapsamında değildir.
 
 ## Mimari
 
