@@ -7,6 +7,7 @@ from typing import Literal
 import pandas as pd
 from pydantic import BaseModel, Field
 
+from core.columns import is_text_dtype_name
 from core.metadata import DatasetMetadataCard, MetadataGenerator
 
 AllowedAction = Literal[
@@ -70,7 +71,7 @@ class GeminiPlanner:
             if column.null_ratio > 0.90:
                 action: AllowedAction = "drop_column"
                 reason = "Sütunun eksik değer oranı %90 üzerinde."
-            elif column.dtype in {"object", "string"}:
+            elif is_text_dtype_name(column.dtype):
                 samples = " ".join(column.sample_values)
                 if any(token in samples for token in ("TL", "₺", "$", "€", "%")):
                     action = "parse_currency"
