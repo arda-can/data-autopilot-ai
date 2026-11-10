@@ -16,6 +16,7 @@ from core.columns import (
     parse_numeric_text,
     text_columns,
 )
+from core.formatting import decimal_tr
 
 
 class AuditLog(BaseModel):
@@ -48,10 +49,15 @@ class ActionExecutor:
                              len(frame), values, [])
         return result
 
-    def drop_column(self, frame: pd.DataFrame, column: str) -> pd.DataFrame:
+    def drop_column(self, frame: pd.DataFrame, column: str, reason: str = "") -> pd.DataFrame:
         result = frame.copy()
         if column in result.columns:
-            self._record(column, "Sütunu kaldır", "Kullanıcı tarafından onaylanan plan aksiyonu.",
+            missing = float(result[column].isna().mean())
+            explanation = (
+                f"%90'dan fazlası boş olduğu için otomatik kaldırıldı (eksik oranı %{decimal_tr(missing * 100)})."
+                if missing > 0.90 else f"Plan aksiyonu uygulandı: {reason or 'Sütunun kaldırılması önerildi.'}"
+            )
+            self._record(column, "Sütunu kaldır", explanation,
                          len(result), result[column].head(5), [])
             return result.drop(columns=[column])
         return result
@@ -60,7 +66,7 @@ class ActionExecutor:
         result = frame.copy()
         for column in list(result.columns):
             if result[column].isna().mean() > threshold:
-                self._record(str(column), "Boş sütunu kaldır", f"Eksik oranı %{threshold * 100:.0f} üzerinde.",
+                self._record(str(column), "Boş sütunu kaldır", f"%{decimal_tr(threshold * 100, 0)}'dan fazlası boş olduğu için otomatik kaldırıldı.",
                              int(result[column].isna().sum()), result[column].head(5), [])
                 result = result.drop(columns=[column])
         return result
@@ -204,15 +210,17 @@ class ActionExecutor:
         for item in approved_actions:
             if hasattr(item, "column") and hasattr(item, "action"):
                 column, action = item.column, item.action
+                reason = getattr(item, "reason", "")
                 approved = True
             else:
                 column = str(item.get("column", ""))
                 action = str(item.get("action", "keep_as_is"))
+                reason = str(item.get("reason", ""))
                 approved = bool(item.get("onay", item.get("approved", True)))
             if not approved or action == "keep_as_is":
                 continue
             if action == "drop_column":
-                result = self.drop_column(result, column)
+                result = self.drop_column(result, column, reason)
             elif action == "parse_currency":
                 result = self.clean_currency_and_numeric_strings(result, column)
             elif action == "parse_datetime":
