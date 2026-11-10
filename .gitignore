@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Gizli bilgiler
+.env
+.streamlit/secrets.toml
+
+# Büyük veri setleri (Olist: README'deki bağlantıdan indirilir)
+data/olist_*.csv
+data/product_category_name_translation.csv
+
+# Editör / işletim sistemi
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
