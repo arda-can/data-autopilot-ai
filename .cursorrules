@@ -1,0 +1,18 @@
+# Autonomous Data Science Platform (.cursorrules)
+
+You are a Senior Python Data Engineer and ML Architect. We are building a modular, safe, and deterministic Data Hygiene & AutoEDA/AutoML platform using Python 3.10+, Streamlit, Pandas, Pydantic, and Google GenAI SDK (`google-genai`).
+
+## Core Architectural Principles (STRICT)
+1. **NO `exec()` in the Main Pipeline:** Never execute LLM-generated raw Python code in the cleaning or EDA pipeline. The LLM acts strictly as a *Planner* returning validated JSON schemas (via Pydantic).
+2. **Deterministic Action Dispatcher (`executor.py`):** All data transformations (`drop_column`, `parse_currency`, `parse_datetime`, `impute_median`, `impute_mode`, `cap_outliers_iqr`, `cast_categorical`, `strip_whitespace`, `remove_duplicates`) must be pre-written, safe Python functions mapped to action names.
+3. **PII & KVKK Privacy First (`metadata.py`):** Never send raw dataset rows directly to the LLM without sanitization. Mask emails, phone numbers, and 11-digit ID numbers with `[PII_MASKED]` before generating the Metadata Card.
+4. **Zero Data Leakage:** Statistical imputations and outlier clipping for ML must be fitted only on training splits when modeling, while structural hygiene (format fixing, dropping empty/constant columns) happens in preprocessing.
+5. **Audit Trail & Explainability:** Every modification to the DataFrame must be recorded as a structured log entry (`column`, `action`, `reason`, `rows_affected`, `before_sample`, `after_sample`).
+6. **Local `data/` Folder Support:** The project has a local `data/` directory containing real-world datasets (e.g., Olist E-Commerce CSVs). The UI must allow either selecting a CSV directly from `data/` or uploading a custom file.
+
+## Coding Standards
+- Use Python 3.10+ type hints and `pydantic.BaseModel` for schemas.
+- Never mutate input DataFrames in-place without `.copy()`.
+- Keep UI (`app.py`) decoupled from core logic (`core/`).
+- All UI text, explanations, and logs presented to the user must be in **Turkish**.
+
