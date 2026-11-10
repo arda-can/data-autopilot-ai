@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import plotly.express as px
 from sklearn.compose import ColumnTransformer
+from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.ensemble import (
     HistGradientBoostingClassifier, HistGradientBoostingRegressor,
     RandomForestClassifier, RandomForestRegressor,
@@ -31,6 +32,12 @@ class AutoMLResult:
     best_model: str
     feature_importance: pd.DataFrame
     figure: Any
+    metric: str = ""
+    baseline_model: str = ""
+    baseline_score: float = 0.0
+    best_score: float = 0.0
+    beats_baseline: bool = False
+    verdict: str = ""
 
 
 class AutoMLEngine:
@@ -77,7 +84,8 @@ class AutoMLEngine:
             ],
             remainder="drop",
         )
-        models = self._models(problem_type)
+        baseline_name, baseline = self._baseline(problem_type)
+        models = {**self._models(problem_type), baseline_name: baseline}
         scores: list[dict[str, float | str]] = []
         fitted: dict[str, Pipeline] = {}
         for name, model in models.items():
@@ -100,14 +108,33 @@ class AutoMLEngine:
             fitted[name] = pipeline
         sort_column = "F1-Score (Weighted)" if problem_type == "Classification" else "R2 Score"
         leaderboard = pd.DataFrame(scores).sort_values(sort_column, ascending=False).reset_index(drop=True)
-        best_model = str(leaderboard.iloc[0]["Model"])
+        # Taban model hiçbir özelliğe bakmaz; gerçek modeller ancak onu geçerse bir şey öğrenmiş sayılır.
+        is_baseline = leaderboard["Model"] == baseline_name
+        best_model = str(leaderboard.loc[~is_baseline, "Model"].iloc[0])
+        best_score = float(leaderboard.loc[~is_baseline, sort_column].iloc[0])
+        baseline_score = float(leaderboard.loc[is_baseline, sort_column].iloc[0])
+        beats_baseline = best_score - baseline_score > (0.02 if problem_type == "Classification" else 0.05)
+        if beats_baseline:
+            verdict = (
+                f"{best_model}, hiçbir özelliğe bakmayan taban modeli geçti "
+                f"({sort_column}: taban {baseline_score:.3f} → model {best_score:.3f})."
+            )
+        else:
+            verdict = (
+                f"Modeller taban modeli anlamlı biçimde geçemedi ({sort_column}: taban {baseline_score:.3f}, "
+                f"en iyi model {best_score:.3f}). Bu hedef mevcut sütunlarla güvenilir biçimde tahmin edilemiyor."
+            )
         importance = self._importance(fitted[best_model], X_test, y_test)
         figure = px.bar(
             importance.head(30).sort_values("Importance"),
             x="Importance", y="Feature", orientation="h",
             title=f"{best_model} - Özellik Önem Düzeyleri",
         )
-        return AutoMLResult(problem_type, leaderboard, best_model, importance, figure)
+        return AutoMLResult(
+            problem_type, leaderboard, best_model, importance, figure,
+            metric=sort_column, baseline_model=baseline_name, baseline_score=baseline_score,
+            best_score=best_score, beats_baseline=beats_baseline, verdict=verdict,
+        )
 
     @staticmethod
     def _problem_type(target: pd.Series, target_col: str = "") -> str:
@@ -183,6 +210,12 @@ class AutoMLEngine:
     @staticmethod
     def _is_identifier_name(column: str) -> bool:
         return is_identifier_name(column)
+
+    @staticmethod
+    def _baseline(problem_type: str) -> tuple[str, Any]:
+        if problem_type == "Classification":
+            return "Taban (en sık sınıf)", DummyClassifier(strategy="most_frequent")
+        return "Taban (ortalama)", DummyRegressor(strategy="mean")
 
     def _models(self, problem_type: str) -> dict[str, Any]:
         if problem_type == "Classification":

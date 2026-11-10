@@ -159,16 +159,23 @@ if selected_target != "-- Hedef seçin --" and (
     result.suggested_target is not None and selected_target != result.suggested_target
     or result.suggested_target is None and selected_target != target_options_for_ui[0]
 ):
-    try:
-        automl = AutoMLEngine().run(cleaned, selected_target)
-    except (ValueError, TypeError, KeyError) as exc:
-        automl = None
-        automl_error = f"'{selected_target}' hedefi için AutoML çalıştırılamadı: {exc}"
+    # Aynı veri ve hedef için model yalnızca bir kez eğitilir; her yeniden çizimde tekrarlanmaz.
+    cache = st.session_state.setdefault("automl_cache", {})
+    cache_key = (st.session_state.data_signature, selected_target)
+    if cache_key not in cache:
+        sample = cleaned.sample(10_000, random_state=42) if len(cleaned) > 10_000 else cleaned
+        try:
+            cache[cache_key] = AutoMLEngine().run(sample, selected_target)
+        except (ValueError, TypeError, KeyError) as exc:
+            cache[cache_key] = f"'{selected_target}' hedefi için AutoML çalıştırılamadı: {exc}"
+    cached = cache[cache_key]
+    automl, automl_error = (None, cached) if isinstance(cached, str) else (cached, "")
 if selected_target != "-- Hedef seçin --":
     st.write(f"**Tahmin edilen hedef sütun:** `{selected_target}`")
 if automl is not None:
     st.write(f"**Problem tipi:** {automl.problem_type}")
     st.write(f"**En iyi model:** {automl.best_model}")
+    (st.success if automl.beats_baseline else st.warning)(automl.verdict)
     st.subheader("Leaderboard")
     st.dataframe(automl.leaderboard, use_container_width=True, hide_index=True)
     st.subheader("Özellik Önemi")
