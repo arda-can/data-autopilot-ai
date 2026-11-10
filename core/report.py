@@ -615,7 +615,8 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
             story.append(para("Öne Çıkan Grafikler", h2))
         budget = 6 - int(bool(report.model and report.model.top_features))
         exported = fallbacks = 0
-        for chart_summary, figure in zip(report.charts, figures):
+        shown: set[int] = set()  # PDF'te görseli basılan grafiklerin sırası
+        for position, (chart_summary, figure) in enumerate(zip(report.charts, figures)):
             if exported >= budget:
                 break
             if not can_export(figure):
@@ -628,13 +629,18 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
                 para(chart_summary.insight, note),
             ]))
             exported += 1
+            shown.add(position)
         if fallbacks:
             story.append(para(
                 f"Not: {fallbacks} grafik birincil çizici (Kaleido) kullanılamadığı için yedek çizici (Matplotlib) "
                 "ile üretildi; görünümü HTML rapordaki etkileşimli grafikten farklı olabilir.", note,
             ))
         story.append(para("Öne Çıkan Bulgular", h2))
-        story += bullets([f"{chart.title}: {chart.insight}" for chart in report.charts])
+        # 3B, paralel koordinat veya sınır dışı kalan grafikler PDF'te yok; okur nerede bulacağını bilmeli.
+        story += bullets([
+            f"{chart.title}: {chart.insight}" + ("" if position in shown else " (grafiği HTML raporunda)")
+            for position, chart in enumerate(report.charts)
+        ])
         story.append(para("Etkileşimli grafikler HTML raporunda yer alır.", note))
     if "actions" in tables:
         story += [para("Uygulanan İşlemler", h2), table(*tables["actions"], widths=[0.22, 0.22, 0.44, 0.12])]
