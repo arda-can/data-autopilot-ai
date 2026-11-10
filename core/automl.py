@@ -21,6 +21,8 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.base import clone
 from sklearn.inspection import permutation_importance
 
+from core.columns import parse_datetime_text
+
 
 @dataclass
 class AutoMLResult:
@@ -162,15 +164,7 @@ class AutoMLEngine:
 
     @staticmethod
     def _is_date_like(series: pd.Series) -> bool:
-        if pd.api.types.is_datetime64_any_dtype(series):
-            return True
-        if not (pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series)):
-            return False
-        values = series.dropna()
-        if values.empty:
-            return False
-        parsed = pd.to_datetime(values, errors="coerce", dayfirst=True, format="mixed")
-        return bool(parsed.notna().mean() >= 0.80)
+        return parse_datetime_text(series) is not None
 
     @staticmethod
     def _prepare_features(frame: pd.DataFrame) -> pd.DataFrame:
@@ -178,9 +172,7 @@ class AutoMLEngine:
         for column in frame.columns:
             series = frame[column]
             name = str(column)
-            parsed = series if pd.api.types.is_datetime64_any_dtype(series) else None
-            if parsed is None and AutoMLEngine._is_date_like(series):
-                parsed = pd.to_datetime(series, errors="coerce", dayfirst=True, format="mixed")
+            parsed = parse_datetime_text(series)
             if parsed is not None:
                 prepared[f"{name}_month"] = parsed.dt.month
                 prepared[f"{name}_dayofweek"] = parsed.dt.dayofweek

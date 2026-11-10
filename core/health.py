@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
-
 import pandas as pd
 from pydantic import BaseModel, Field
+
+from core.columns import is_identifier_name, is_text_series, numeric_text_ratio
 
 
 class ColumnHealth(BaseModel):
@@ -35,8 +35,6 @@ class HealthReport(BaseModel):
 class DataHealthAnalyzer:
     """DataFrame üzerinde yalnızca gözlemlenebilir kalite metrikleri hesaplar."""
 
-    _numeric_pattern = re.compile(r"^[\s\d.,%₺$€TL-]+$", re.IGNORECASE)
-
     def analyze(self, frame: pd.DataFrame) -> HealthReport:
         if not isinstance(frame, pd.DataFrame):
             raise TypeError("Analiz için pandas.DataFrame gereklidir.")
@@ -58,11 +56,11 @@ class DataHealthAnalyzer:
             )
             if is_id:
                 possible_ids.append(name)
-            dirty = False
-            if series.dtype == "object":
-                values = series.dropna().astype(str).str.strip()
-                numeric_like = values.str.replace(r"[\d\s.,%₺$€TL-]", "", regex=True).eq("").mean()
-                dirty = bool(len(values) and numeric_like >= 0.60 and not pd.to_numeric(values, errors="coerce").notna().all())
+            dirty = bool(
+                is_text_series(series)
+                and not is_identifier_name(name)
+                and numeric_text_ratio(series) >= 0.60
+            )
             if dirty:
                 dirty_numeric.append(name)
             column_reports.append(

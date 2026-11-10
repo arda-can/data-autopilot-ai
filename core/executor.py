@@ -8,6 +8,15 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 
+from core.columns import (
+    is_identifier_name,
+    is_text_series,
+    numeric_text_ratio,
+    parse_datetime_text,
+    parse_numeric_text,
+    text_columns,
+)
+
 
 class AuditLog(BaseModel):
     column: str
@@ -62,13 +71,13 @@ class ActionExecutor:
         count = int(mask.sum())
         if count:
             self._record("Tüm sütunlar", "Mükerrerleri kaldır", "Tamamen aynı satırlar kaldırıldı.",
-                         count, result.loc[mask].head(5).astype(str).agg(" | ".join, axis=1), [])
+                         count, [" | ".join(map(str, row)) for row in result.loc[mask].head(5).itertuples(index=False)], [])
             result = result.loc[~mask].reset_index(drop=True)
         return result
 
     def strip_whitespace(self, frame: pd.DataFrame, column: str | None = None) -> pd.DataFrame:
         result = frame.copy()
-        columns = [column] if column else list(result.select_dtypes(include=["object", "string"]).columns)
+        columns = [column] if column else text_columns(result)
         for current_column in columns:
             if current_column not in result.columns:
                 continue
@@ -118,35 +127,52 @@ class ActionExecutor:
         return result
 
     def clean_currency_and_numeric_strings(self, frame: pd.DataFrame, column: str | None = None) -> pd.DataFrame:
+        """Tamamı sayı biçiminde olan metin sütunlarını sayıya çevirir.
+
+        Otomatik modda kimlik adlı sütunlara dokunmaz ve değerlerin en az %90'ı sayı
+        biçiminde olmalıdır; açıkça sütun verildiğinde eşik %60'tır.
+        """
         result = frame.copy()
-        columns = [column] if column else list(result.select_dtypes(include=["object", "string"]).columns)
+        explicit = column is not None
+        threshold = 0.60 if explicit else 0.90
+        columns = [column] if explicit else text_columns(result)
         for current_column in columns:
-            if current_column not in result.columns:
+            if current_column not in result.columns or not is_text_series(result[current_column]):
                 continue
-            values = result[current_column].astype("string")
-            candidate = values.str.replace(r"[^\d,.\-]", "", regex=True).str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
-            converted = pd.to_numeric(candidate, errors="coerce")
-            valid = values.notna() & converted.notna()
-            if valid.any() and (column is not None or valid.mean() >= 0.60):
-                before = result[current_column].copy()
-                result[current_column] = converted
-                self._record(str(current_column), "Para ve sayısal metinleri dönüştür",
-                             "Para birimi ve yerel sayı biçimi sayısala çevrildi.", int(valid.sum()), before, result[current_column])
+            if not explicit and is_identifier_name(current_column):
+                continue
+            series = result[current_column]
+            present = int(series.notna().sum())
+            if not present or numeric_text_ratio(series) < threshold - 0.10:
+                continue
+            numbers, valid = parse_numeric_text(series)
+            converted = int(valid.sum())
+            if converted / present < threshold:
+                continue
+            reason = "Para birimi ve yerel sayı biçimi sayısala çevrildi."
+            if converted < present:
+                reason += f" Sayı biçiminde olmayan {present - converted} değer boş bırakıldı."
+            result[current_column] = numbers
+            self._record(str(current_column), "Para ve sayısal metinleri dönüştür", reason,
+                         converted, series, result[current_column])
         return result
 
     def parse_datetime_columns(self, frame: pd.DataFrame, column: str | None = None) -> pd.DataFrame:
         result = frame.copy()
-        columns = [column] if column else list(result.select_dtypes(include=["object", "string"]).columns)
+        columns = [column] if column else text_columns(result)
         for current_column in columns:
             if current_column not in result.columns:
                 continue
-            parsed = pd.to_datetime(result[current_column], errors="coerce", dayfirst=True)
-            valid = result[current_column].notna() & parsed.notna()
-            if len(result) and valid.mean() >= 0.80:
-                before = result[current_column].copy()
-                result[current_column] = parsed
-                self._record(str(current_column), "Tarihleri dönüştür", "Tarih biçimi standartlaştırıldı.",
-                             int(valid.sum()), before, result[current_column])
+            series = result[current_column]
+            if pd.api.types.is_datetime64_any_dtype(series):
+                continue
+            parsed = parse_datetime_text(series)
+            if parsed is None:
+                continue
+            valid = series.notna() & parsed.notna()
+            result[current_column] = parsed
+            self._record(str(current_column), "Tarihleri dönüştür", "Tarih biçimi standartlaştırıldı.",
+                         int(valid.sum()), series, result[current_column])
         return result
 
     def cap_outliers_iqr(self, frame: pd.DataFrame, multiplier: float = 1.5,
