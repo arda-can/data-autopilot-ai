@@ -426,7 +426,9 @@ def render_html(
 
 # --- PDF -------------------------------------------------------------------------------------
 
-_TURKISH_PROBE = "ğşıİĞŞöüçÖÜÇ"
+_BULLET_GAP = 14  # punto; bir gövde satırı kadar. 11 ve altında pdftotext maddeleri hâlâ birleştiriyor (ölçüldü).
+
+_TURKISH_PROBE ="ğşıİĞŞöüçÖÜÇ"
 _ASCII_FALLBACK = str.maketrans({
     "ğ": "g", "Ğ": "G", "ş": "s", "Ş": "S", "ı": "i", "İ": "I",
     "→": "->", "–": "-", "—": "-", "•": "-", "“": '"', "”": '"', "’": "'", "·": "-",
@@ -510,7 +512,9 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
     h3 = style("h3", font=bold, size=10, spaceBefore=8, spaceAfter=4)
     eyebrow = style("eyebrow", font=bold, size=8.5, color=accent)
     kpi_value = style("kpi_value", font=bold, size=16)
-    bullet = style("bullet", leftIndent=14, bulletIndent=0, spaceAfter=3, bulletFontName=regular)
+    # Maddeler arası boşluk satır aralığından belirgin büyük olmalı: aksi halde PDF okuyucular ve metin
+    # çıkarıcılar ardışık maddeleri tek paragraf sayıp birleştirir ("...görülüyor.• 3 Boyutlu").
+    bullet = style("bullet", leftIndent=14, firstLineIndent=-10, spaceAfter=_BULLET_GAP, bulletFontName=regular)
 
     def para(text: Any, paragraph_style: ParagraphStyle = body) -> Paragraph:
         return Paragraph(xml_escape(safe(str(text))), paragraph_style)
