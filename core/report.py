@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from core.autopilot import AutopilotResult
 from core.health import OutlierFinding
+from core.formatting import decimal_tr, integer_tr, localize_figure
 
 _PROBLEM_TYPES = {"Classification": "Sınıflandırma", "Regression": "Regresyon"}
 
@@ -89,14 +90,11 @@ class ExecutiveReport(BaseModel):
 
 
 def _int(value: int) -> str:
-    return f"{value:,}".replace(",", ".")
-
-
-_TR_SEPARATORS = str.maketrans({",": ".", ".": ","})
+    return integer_tr(value)
 
 
 def _dec(value: float, digits: int = 1) -> str:
-    return f"{value:,.{digits}f}".translate(_TR_SEPARATORS)
+    return decimal_tr(value, digits)
 
 
 def _num(value: float) -> str:
@@ -180,6 +178,17 @@ def build_report(
     headline.append(model.verdict if model else (result.automl_message or "Tahmin modeli eğitilmedi."))
 
     recommendations: list[str] = []
+    for finding in after.domain_findings:
+        recommendations.append(
+            f"“{finding.column}” sütununda {_int(finding.count)} negatif değer şüpheli; "
+            "alan kuralı gereği negatif olmamalı. Kaynak kayıtlar incelenmeli; değerler değiştirilmedi."
+        )
+    for finding in after.category_variants:
+        recommendations.append(
+            f"“{finding.column}” sütununda aksan veya büyük/küçük harf farkıyla oluşmuş "
+            f"{_int(finding.group_count)} olası kategori kopyası grubu ({_int(finding.affected_count)} kayıt) var. "
+            "Birleştirme öncesinde incelenmesi önerilir; değerler değiştirilmedi."
+        )
     if before.mükerrer_satır_sayısı:
         recommendations.append(
             f"{_int(before.mükerrer_satır_sayısı)} mükerrer kayıt bulundu ve kaldırıldı; "
@@ -342,7 +351,7 @@ def render_html(
         plotly_loaded = True
         # Sabit yükseklik şart: ızgara hücresinde %100 yükseklik sıfıra çöker ve grafikler üst üste biner.
         # Izgara `auto-fill` olmalı: `auto-fit` ilk grafiği tam genişlikte çizdirir, sonra kart dışına taşar.
-        return figure.to_html(
+        return localize_figure(figure).to_html(
             full_html=False, include_plotlyjs=include, default_height="420px",
             config={"displaylogo": False, "responsive": True},
         )
@@ -474,15 +483,16 @@ def _pdf_fonts() -> tuple[str, str, Callable[[str], str]]:
     return "Helvetica", "Helvetica-Bold", _ascii_safe
 
 
-def render_pdf(report: ExecutiveReport) -> bytes:
-    """Yazdırmaya hazır A4 PDF. Etkileşimli grafikler yerine tablo ve özellik önemi çubuğu içerir."""
+def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
+    """A4 PDF; rapor modelinden ayrı alınan grafikler en fazla altı statik görsele çevrilir."""
+    from core.chart_export import can_export, chart_png
     from reportlab.graphics.charts.barcharts import HorizontalBarChart
     from reportlab.graphics.shapes import Drawing
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import Image, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     regular, bold, safe = _pdf_fonts()
     ink, muted, line, accent = (colors.HexColor(code) for code in ("#16202e", "#5b6778", "#e3e8ef", "#1d5fd1"))
@@ -507,7 +517,8 @@ def render_pdf(report: ExecutiveReport) -> bytes:
 
     def bullets(items: Sequence[str], numbered: bool = False) -> list[Paragraph]:
         return [
-            Paragraph(xml_escape(safe(item)), bullet, bulletText=f"{index}." if numbered else safe("•"))
+            # İşaret ve içerik aynı metin bloğunda: PDF metin çıkarımında da maddeler ayrılır.
+            Paragraph(xml_escape(safe(f"{index}. {item}" if numbered else f"• {item}")), bullet)
             for index, item in enumerate(items, start=1)
         ]
 
@@ -552,7 +563,11 @@ def render_pdf(report: ExecutiveReport) -> bytes:
             Spacer(1, 6),
         ]
         if "leaderboard" in tables:
-            story.append(table(*tables["leaderboard"]))
+            headers, rows = tables["leaderboard"]
+            # Model adlarına ayrılan alan en uzun sklearn adını da tek satırda tutar.
+            count = len(headers)
+            widths = [0.48, *([0.52 / (count - 1)] * (count - 1))] if count > 1 else [1.0]
+            story.append(table(headers, rows, widths=widths))
         if model.top_features:
             features = model.top_features[::-1]
             height = 22 + 16 * len(features)
@@ -570,6 +585,7 @@ def render_pdf(report: ExecutiveReport) -> bytes:
             chart.valueAxis.labels.fontName = regular
             chart.valueAxis.labels.fontSize = 7
             chart.valueAxis.strokeColor = line
+            chart.valueAxis.labelTextFormat = lambda value: _dec(value, 3)
             chart.bars[0].fillColor = accent
             chart.bars[0].strokeColor = None
             drawing.add(chart)
@@ -591,6 +607,22 @@ def render_pdf(report: ExecutiveReport) -> bytes:
             table(*tables["outliers"], widths=[0.26, 0.13, 0.11, 0.24, 0.13, 0.13]),
         ]
     if report.charts:
+        if figures:
+            story.append(para("Öne Çıkan Grafikler", h2))
+        budget = 6 - int(bool(report.model and report.model.top_features))
+        exported = 0
+        for chart_summary, figure in zip(report.charts, figures):
+            if exported >= budget:
+                break
+            if not can_export(figure):
+                continue
+            png = chart_png(figure)
+            story.append(KeepTogether([
+                para(chart_summary.title, h3),
+                Image(BytesIO(png), width=content_width, height=content_width * 0.56),
+                para(chart_summary.insight, note),
+            ]))
+            exported += 1
         story.append(para("Öne Çıkan Bulgular", h2))
         story += bullets([f"{chart.title}: {chart.insight}" for chart in report.charts])
         story.append(para("Etkileşimli grafikler HTML raporunda yer alır.", note))
