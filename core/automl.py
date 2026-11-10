@@ -114,15 +114,16 @@ class AutoMLEngine:
         best_score = float(leaderboard.loc[~is_baseline, sort_column].iloc[0])
         baseline_score = float(leaderboard.loc[is_baseline, sort_column].iloc[0])
         beats_baseline = best_score - baseline_score > (0.02 if problem_type == "Classification" else 0.05)
+        base_text, best_text = (f"{score:.3f}".replace(".", ",") for score in (baseline_score, best_score))
         if beats_baseline:
             verdict = (
                 f"{best_model}, hiçbir özelliğe bakmayan taban modeli geçti "
-                f"({sort_column}: taban {baseline_score:.3f} → model {best_score:.3f})."
+                f"({sort_column}: taban {base_text} → model {best_text})."
             )
         else:
             verdict = (
-                f"Modeller taban modeli anlamlı biçimde geçemedi ({sort_column}: taban {baseline_score:.3f}, "
-                f"en iyi model {best_score:.3f}). Bu hedef mevcut sütunlarla güvenilir biçimde tahmin edilemiyor."
+                f"Modeller taban modeli anlamlı biçimde geçemedi ({sort_column}: taban {base_text}, "
+                f"en iyi model {best_text}). Bu hedef mevcut sütunlarla güvenilir biçimde tahmin edilemiyor."
             )
         importance = self._importance(fitted[best_model], X_test, y_test)
         figure = px.bar(
