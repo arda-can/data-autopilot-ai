@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from io import BytesIO
 from typing import Any
 
 import numpy as np
 
 from core.formatting import decimal_tr, localize_figure
+
+logger = logging.getLogger(__name__)
 
 _SKIPPED = frozenset({"scatter3d", "surface", "mesh3d", "cone", "volume", "isosurface", "parcoords"})
 
@@ -16,15 +19,31 @@ def can_export(figure: Any) -> bool:
     return bool(figure.data) and not any(trace.type in _SKIPPED for trace in figure.data)
 
 
-def chart_png(figure: Any) -> bytes:
-    """Girdiyi değiştirmez; Chrome veya Kaleido engeli PDF üretimini durdurmaz."""
+class ChartPng(bytes):
+    """PNG baytları; `fallback`, görselin Kaleido yerine yedek çizici (Matplotlib) ile üretildiğini söyler."""
+
+    fallback: bool = False
+
+
+def chart_png(figure: Any) -> ChartPng:
+    """Girdiyi değiştirmez; Chrome veya Kaleido engeli PDF üretimini durdurmaz.
+
+    Kaleido başarısız olursa hata yutulmaz: uyarı olarak loglanır ve dönen değerin
+    `fallback` alanı işaretlenir; rapor bunu okura bir notla bildirir.
+    """
     if not can_export(figure):
         raise ValueError("3B ve paralel koordinatlar PDF'e aktarılmaz.")
     light = localize_figure(figure, light=True)
     try:
-        return light.to_image(format="png", width=1000, height=560, scale=1.5)
-    except Exception:
-        return _matplotlib_png(light)
+        return ChartPng(light.to_image(format="png", width=1000, height=560, scale=1.5))
+    except Exception as exc:  # Kaleido; Chrome yokluğu, zaman aşımı, ilke engeli gibi farklı türler fırlatır.
+        logger.warning(
+            "Kaleido ile grafik dışa aktarımı başarısız (%s: %s); Matplotlib yedeğine geçildi.",
+            type(exc).__name__, exc,
+        )
+        png = ChartPng(_matplotlib_png(light))
+        png.fallback = True
+        return png
 
 
 def _matplotlib_png(figure: Any) -> bytes:

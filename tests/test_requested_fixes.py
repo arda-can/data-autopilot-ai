@@ -153,3 +153,29 @@ def test_app_uses_new_width_parameter() -> None:
     source = (ROOT / "app.py").read_text(encoding="utf-8")
     assert "use_container_width" not in source
     assert 'width="stretch"' in source
+
+
+def test_kaleido_failure_is_logged_and_noted_in_pdf(monkeypatch, caplog, dirty_result) -> None:
+    from reportlab.platypus import Paragraph, SimpleDocTemplate
+
+    def blocked(self, **kwargs):
+        raise RuntimeError("Chrome bulunamadı")
+    monkeypatch.setattr(go.Figure, "to_image", blocked)
+    with caplog.at_level("WARNING", logger="core.chart_export"):
+        png = chart_png(px.scatter(x=[1, 2], y=[3, 4]))
+    assert png.fallback and png.startswith(b"\x89PNG")
+    assert "Matplotlib yedeğine geçildi" in caplog.text and "Chrome bulunamadı" in caplog.text
+
+    story = []
+    original = SimpleDocTemplate.build
+    monkeypatch.setattr(SimpleDocTemplate, "build", lambda self, flowables, **kw: (story.extend(flowables), original(self, flowables, **kw))[1])
+    report = build_report(dirty_result, "test.csv")
+    figures = [px.scatter(x=[1, 2], y=[3, 4]) for _ in report.charts]
+    assert render_pdf(report, figures).startswith(b"%PDF")
+    notes = [item.getPlainText() for item in story if isinstance(item, Paragraph)]
+    assert any("yedek çizici (Matplotlib)" in text for text in notes)
+
+
+def test_successful_export_has_no_fallback_flag(monkeypatch) -> None:
+    monkeypatch.setattr(go.Figure, "to_image", lambda self, **kwargs: b"\x89PNG-ok")
+    assert chart_png(px.scatter(x=[1], y=[2])).fallback is False
