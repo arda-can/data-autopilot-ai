@@ -178,3 +178,22 @@ def test_charts_flow_three_per_page_without_forced_breaks(monkeypatch: pytest.Mo
         for block in blocks[1:4]
     ]
     assert sum(heights) <= usable_height
+
+
+def test_findings_shown_with_a_chart_are_not_repeated(monkeypatch: pytest.MonkeyPatch, dirty_result: AutopilotResult) -> None:
+    figures = [px.scatter(x=[1, 2], y=[3, 4]), px.scatter_3d(x=[1, 2], y=[2, 3], z=[3, 4])]
+    story = _story(monkeypatch)
+    render_pdf(_report_with_charts(dirty_result, figures), figures)
+    texts = _texts(story)
+    assert texts.count("bulgu 0.") == 1                       # yalnızca grafiğin altında
+    assert not any(text.startswith("• Grafik 0") for text in texts)
+    assert "• Grafik 1: bulgu 1. (grafiği HTML raporunda)" in texts
+    assert "Diğer Bulgular" in texts
+
+
+def test_no_findings_section_when_every_chart_is_shown(monkeypatch: pytest.MonkeyPatch, dirty_result: AutopilotResult) -> None:
+    figures = [px.scatter(x=[1, 2], y=[3, 4]), px.bar(x=["a", "b"], y=[1, 2])]
+    story = _story(monkeypatch)
+    render_pdf(_report_with_charts(dirty_result, figures), figures)
+    texts = _texts(story)
+    assert "Diğer Bulgular" not in texts and "Öne Çıkan Bulgular" not in texts
