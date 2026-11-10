@@ -14,6 +14,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from core.automl import AutoMLEngine, AutoMLResult
+from core.columns import is_geo_coordinate_name, is_identifier_column
 from core.executor import ActionExecutor, AuditLog
 from core.health import DataHealthAnalyzer, HealthReport, OutlierFinding
 from core.metadata import DatasetMetadataCard, MetadataGenerator
@@ -252,19 +253,7 @@ class AutopilotEngine:
 
     @staticmethod
     def _is_identifier(frame: pd.DataFrame, column: str) -> bool:
-        series = frame[column]
-        lowered = column.lower()
-        identifier_tokens = (
-            "id", "kimlik", "posta", "zip", "code", "kod", "müşteri adı",
-            "musteri adi", "name", "isim", "ad soyad", "uuid",
-        )
-        return (
-            any(token in lowered for token in identifier_tokens)
-            or (
-                not pd.api.types.is_numeric_dtype(series)
-                and series.nunique(dropna=True) >= max(50, int(len(frame) * 0.95))
-            )
-        )
+        return is_identifier_column(frame[column], column)
 
     def _suggest_target(self, frame: pd.DataFrame) -> str | None:
         preferred = (
@@ -276,14 +265,11 @@ class AutopilotEngine:
         for column in frame.columns:
             name = str(column)
             series = frame[column]
-            lowered = name.lower()
             if (
                 series.isna().all()
                 or self._is_identifier(frame, name)
                 or pd.api.types.is_datetime64_any_dtype(series)
-                or "posta" in lowered
-                or "lat" in lowered
-                or "lng" in lowered
+                or is_geo_coordinate_name(name)
             ):
                 continue
             if series.nunique(dropna=True) < 2:

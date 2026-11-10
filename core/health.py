@@ -84,9 +84,7 @@ class DataHealthAnalyzer:
             series = frame[column]
             name = str(column)
             unique = int(series.nunique(dropna=True))
-            is_id = unique == rows and rows > 0 and (
-                name.lower().endswith(("id", "_id")) or "id" in name.lower()
-            )
+            is_id = unique == rows and rows > 0 and is_identifier_name(name)
             if is_id:
                 possible_ids.append(name)
             dirty = bool(

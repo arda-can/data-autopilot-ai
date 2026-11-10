@@ -21,7 +21,7 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.base import clone
 from sklearn.inspection import permutation_importance
 
-from core.columns import parse_datetime_text
+from core.columns import is_identifier_name, parse_datetime_text
 
 
 @dataclass
@@ -182,10 +182,7 @@ class AutoMLEngine:
 
     @staticmethod
     def _is_identifier_name(column: str) -> bool:
-        return any(token in column.lower() for token in (
-            "id", "kimlik", "posta", "zip", "code", "kod", "müşteri adı",
-            "musteri adi", "name", "isim", "ad soyad", "uuid",
-        ))
+        return is_identifier_name(column)
 
     def _models(self, problem_type: str) -> dict[str, Any]:
         if problem_type == "Classification":

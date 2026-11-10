@@ -1,6 +1,6 @@
 """Data Autopilot AI çekirdek modülleri."""
 
-from .health import DataHealthAnalyzer, HealthReport
+from .health import DataHealthAnalyzer, HealthReport, OutlierFinding
 from .executor import ActionExecutor, AuditLog
 from .metadata import DatasetMetadataCard, MetadataGenerator
 from .planner import AnalysisPlan, GeminiPlanner
@@ -12,6 +12,6 @@ __all__ = [
     "ActionExecutor", "AuditLog", "AnalysisPlan", "DataHealthAnalyzer",
     "DatasetMetadataCard", "GeminiPlanner", "HealthReport", "MetadataGenerator",
     "AutoMLEngine", "AutoMLResult", "DataChatEngine", "DataChatResult",
-    "StructuredDataQuery",
+    "StructuredDataQuery", "OutlierFinding",
     "AutopilotEngine", "AutopilotResult", "ChartInsight",
 ]
