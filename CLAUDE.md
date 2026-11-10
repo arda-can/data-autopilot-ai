@@ -49,4 +49,6 @@ Bunların her biri gerçek bir hatadan doğdu (ayrıntı: `ANALIZ.md`).
 
 ## Yol haritası
 
-`ANALIZ.md` bölüm 5. Sıradaki işler: AutoML baseline modeli, ardından HTML/PDF yönetici raporu, ardından zaman serisi otopilotu.
+`ANALIZ.md` bölüm 5. Tamamlananlar: kritik düzeltmeler, AutoML taban modeli, HTML/PDF yönetici raporu (`core/report.py`). Sıradaki iş: zaman serisi otopilotu (`statsmodels`).
+
+Rapor kuralları: `ExecutiveReport` JSON'a çevrilebilir kalmalı; ham satır ve audit örnekleri rapora girmez; veriden gelen her metin HTML'de `html.escape`, PDF'te `xml_escape` ile kaçırılır. PDF çıktısı testlerle üretiliyor ama sayfa düzeni gözle doğrulanmadı.

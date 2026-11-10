@@ -127,6 +127,8 @@ class AutopilotEngine:
         sample = frame.sample(2500, random_state=42) if len(frame) > 2500 else frame
         variances = {column: float(frame[column].var()) for column in numeric}
         ranked_numeric = sorted(numeric, key=lambda column: variances[column], reverse=True)
+        # Renk/eksen kırılımı için yalnızca az sınıflı kategori: onlarca sınıf lejantı grafiğin önüne geçirir.
+        legend_category = next((column for column in categorical if frame[column].nunique() <= 12), None)
 
         def add(title: str, reason: str, insight: str, figure: Any) -> None:
             charts.append(ChartInsight(title, reason, insight, figure))
@@ -182,7 +184,7 @@ class AutopilotEngine:
 
             axes = ranked_numeric[:3]
             scatter3 = sample[axes].dropna()
-            color = categorical[0] if categorical else None
+            color = legend_category
             if color:
                 scatter3 = sample[[*axes, color]].dropna()
             add("3 Boyutlu Metrik Uzayı", "Varyansı en yüksek üç güvenli metrik X/Y/Z eksenlerine yerleştirildi.",
@@ -211,14 +213,14 @@ class AutopilotEngine:
 
         if numeric:
             value = ranked_numeric[0]
-            violin_frame = sample[[value, categorical[0]]].dropna() if categorical else sample[[value]].dropna()
+            violin_frame = sample[[value, legend_category]].dropna() if legend_category else sample[[value]].dropna()
             skew = float(frame[value].skew())
             kurtosis = float(frame[value].kurtosis())
             shape = "sağa çarpık" if skew > 0.5 else ("sola çarpık" if skew < -0.5 else "simetrik")
             add("Violin ve Çarpıklık Analizi", "En değişken güvenli metrik için dağılımın tamamı seçildi.",
                 f"{value} dağılımı {shape}; çarpıklık {skew:.2f}, basıklık {kurtosis:.2f}.",
-                px.violin(violin_frame, y=value, x=categorical[0] if categorical else None,
-                          color=categorical[0] if categorical else None, box=True, points="outliers",
+                px.violin(violin_frame, y=value, x=legend_category,
+                          color=legend_category, box=True, points="outliers",
                           color_discrete_sequence=px.colors.qualitative.Bold, title=f"{value} keman dağılımı"))
 
         if len(numeric) >= 4:

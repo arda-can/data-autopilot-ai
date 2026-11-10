@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+from dataclasses import replace
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -17,6 +19,7 @@ from core.ingestion import (
     read_local_csv,
     read_tabular_file,
 )
+from core.report import build_report, render_html, render_pdf
 
 
 def _model_dict(value: BaseModel) -> dict:
@@ -33,6 +36,8 @@ if "autopilot_result" not in st.session_state:
     st.session_state.autopilot_result = None
 if "data_signature" not in st.session_state:
     st.session_state.data_signature = None
+if "data_name" not in st.session_state:
+    st.session_state.data_name = "veri"
 
 with st.sidebar:
     st.header("Veri Kaynağı")
@@ -48,6 +53,7 @@ with st.sidebar:
         path = generate_sample_dirty_data()
         st.session_state.dataframe = read_local_csv(path)
         st.session_state.data_signature = f"sample:{path.stat().st_mtime_ns}"
+        st.session_state.data_name = path.name
         st.session_state.autopilot_result = None
         st.rerun()
 
@@ -56,6 +62,7 @@ if uploaded is not None:
     if st.session_state.data_signature != source_signature:
         st.session_state.dataframe = read_tabular_file(uploaded, uploaded.name)
         st.session_state.data_signature = source_signature
+        st.session_state.data_name = uploaded.name
         st.session_state.autopilot_result = None
 elif selected != "-- Seçin --":
     path = next(path for path in files if path.name == selected)
@@ -63,6 +70,7 @@ elif selected != "-- Seçin --":
     if st.session_state.data_signature != source_signature:
         st.session_state.dataframe = read_local_csv(path)
         st.session_state.data_signature = source_signature
+        st.session_state.data_name = path.name
         st.session_state.autopilot_result = None
 
 frame = st.session_state.dataframe
@@ -182,6 +190,43 @@ if automl is not None:
     st.plotly_chart(automl.figure, use_container_width=True)
 else:
     st.info(automl_error or result.automl_message or "Uygun hedef sütun bulunamadığı için AutoML atlandı.")
+
+st.header("📄 Yönetici Raporu")
+st.caption(
+    "Özet, öneriler, grafikler ve model sonucu tek dosyada. "
+    "Ham satırlar ve audit log örnekleri rapora girmez."
+)
+report_key = (st.session_state.data_signature, selected_target)
+if st.button("Raporu Hazırla", key="report_button"):
+    with st.spinner("Rapor hazırlanıyor..."):
+        report = build_report(
+            replace(
+                result,
+                suggested_target=selected_target if automl is not None else result.suggested_target,
+                automl_result=automl,
+                automl_message=automl_error or result.automl_message,
+            ),
+            st.session_state.data_name,
+        )
+        st.session_state.report_files = {
+            "key": report_key,
+            "html": render_html(
+                report, [chart.figure for chart in result.charts], automl.figure if automl is not None else None
+            ).encode("utf-8"),
+            "pdf": render_pdf(report),
+        }
+report_files = st.session_state.get("report_files")
+if report_files and report_files["key"] == report_key:
+    report_stem = Path(st.session_state.data_name).stem
+    html_column, pdf_column = st.columns(2)
+    html_column.download_button(
+        "HTML raporu indir (etkileşimli grafikler)", report_files["html"],
+        f"yonetici_raporu_{report_stem}.html", "text/html", use_container_width=True,
+    )
+    pdf_column.download_button(
+        "PDF raporu indir", report_files["pdf"],
+        f"yonetici_raporu_{report_stem}.pdf", "application/pdf", use_container_width=True,
+    )
 
 st.header("🔍 Detaylar & Manuel Müdahale")
 with st.expander("Audit Log'u göster"):

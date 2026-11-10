@@ -10,6 +10,8 @@ Bir CSV veya Excel dosyası verin; veriyi temizlesin, en anlamlı grafikleri se�
 - **Kişisel veri LLM'e gitmez.** Ham satır gönderilmez. E-posta, telefon, TC kimlik, IBAN ve kart numarası maskelenir; hassas sütunların örnekleri ve istatistikleri tümüyle gizlenir.
 - **Veri sızıntısı yok.** Eksik doldurma ve ölçekleme yalnızca eğitim bölmesinden öğrenilir. Temizlenmiş veride eksikler ve aykırı değerler uydurulmaz, yalnızca raporlanır.
 - **Her değişiklik kayıtlı.** Hangi sütuna ne yapıldığı ve kaç satırın etkilendiği audit log'da görünür.
+- **Modeller bir taban çizgisiyle kıyaslanır.** Hiçbir özelliğe bakmayan taban modeli geçemeyen sonuç, "tahmin edilemiyor" olarak açıkça bildirilir.
+- **Tek tıkla yönetici raporu.** Özet, öneriler, grafikler ve model sonucu HTML (etkileşimli) veya PDF olarak indirilir.
 - **API anahtarı olmadan da çalışır.** Anahtar yoksa kurallı yerel planlayıcı devreye girer.
 
 ## Kurulum
@@ -55,6 +57,7 @@ core/executor.py     Deterministik dönüşümler ve audit log
 core/autopilot.py    Orkestrasyon, grafik seçimi, hedef önerisi
 core/automl.py       Sızıntısız model karşılaştırması
 core/chat.py         Doğal dil sorusu → yapılandırılmış sorgu
+core/report.py       Yönetici raporu: HTML ve PDF
 ```
 
 Ayrıntılı analiz, bilinen sorunlar ve yol haritası: [ANALIZ.md](ANALIZ.md).
