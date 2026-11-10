@@ -96,12 +96,27 @@ metrics[1].metric("Satır Değişimi", f"{before.satır_sayısı} → {after.sat
 metrics[2].metric("Sütun Değişimi", f"{before.sütun_sayısı} → {after.sütun_sayısı}")
 metrics[3].metric("Otomatik İşlem", len(result.audit_logs))
 
-st.write("**Otomatik çözülen veri sorunları**")
+st.write("**Başlangıçta tespit edilen veri sorunları**")
 issues = before.sorunlar if before.sorunlar != ["Belirgin bir kalite sorunu tespit edilmedi."] else [
     "Belirgin bir başlangıç kalite sorunu tespit edilmedi; standart güvenlik kontrolleri uygulandı."
 ]
 for issue in issues:
     st.write(f"• {issue}")
+st.caption(
+    "Eksik ve aykırı değerler bilinçli olarak değiştirilmez: doldurma ve sınırlama yalnızca "
+    "modelleme sırasında, eğitim verisinden öğrenilerek uygulanır (veri sızıntısı önlemi)."
+)
+if result.outliers:
+    with st.expander(f"Şüpheli aykırı değerler: {len(result.outliers)} sütun (değiştirilmedi)"):
+        st.dataframe(
+            pd.DataFrame([_model_dict(item) for item in result.outliers]).rename(columns={
+                "column": "Sütun", "count": "Aykırı Sayısı", "ratio": "Oran",
+                "lower_bound": "Alt Sınır", "upper_bound": "Üst Sınır",
+                "min": "En Küçük", "max": "En Büyük",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
 buffer = io.BytesIO()
 cleaned.to_csv(buffer, index=False, encoding="utf-8-sig")
 st.download_button(

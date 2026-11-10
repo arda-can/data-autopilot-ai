@@ -15,9 +15,9 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from core.automl import AutoMLEngine, AutoMLResult
 from core.executor import ActionExecutor, AuditLog
-from core.health import DataHealthAnalyzer, HealthReport
+from core.health import DataHealthAnalyzer, HealthReport, OutlierFinding
 from core.metadata import DatasetMetadataCard, MetadataGenerator
-from core.planner import GeminiPlanner
+from core.planner import STATISTICAL_ACTIONS, GeminiPlanner
 
 
 @dataclass
@@ -40,6 +40,7 @@ class AutopilotResult:
     suggested_target: str | None = None
     automl_result: AutoMLResult | None = None
     automl_message: str = ""
+    outliers: list[OutlierFinding] = field(default_factory=list)
 
 
 class AutopilotEngine:
@@ -59,7 +60,10 @@ class AutopilotEngine:
         metadata = MetadataGenerator().generate(df)
         plan = GeminiPlanner(api_key).create_plan(df, metadata)
         executor = ActionExecutor()
-        cleaned = executor.execute_plan(df, plan.actions)
+        # Yalnızca yapısal hijyen uygulanır. Eksik doldurma ve aykırı değer kırpma istatistikleri
+        # veri sızıntısını önlemek için burada değil, modelleme hattında eğitim bölmesinden öğrenilir.
+        structural = [item for item in plan.actions if item.action not in STATISTICAL_ACTIONS]
+        cleaned = executor.execute_plan(df, structural)
 
         # Planın kapsamına girmeyen güvenli hijyen adımları da otomatik tamamlanır.
         cleaned = executor.drop_constant_columns(cleaned)
@@ -68,14 +72,9 @@ class AutopilotEngine:
         cleaned = executor.strip_whitespace(cleaned)
         cleaned = executor.clean_currency_and_numeric_strings(cleaned)
         cleaned = executor.parse_datetime_columns(cleaned)
-        for column in list(cleaned.columns):
-            if pd.api.types.is_numeric_dtype(cleaned[column]):
-                cleaned = executor.impute_median(cleaned, str(column))
-            else:
-                cleaned = executor.impute_mode(cleaned, str(column))
-        cleaned = executor.cap_outliers_iqr(cleaned)
 
         after_report = self.analyzer.analyze(cleaned)
+        outliers = self.analyzer.find_outliers(cleaned)
         charts, insights = self._select_charts(cleaned)
         target = self._suggest_target(cleaned)
         automl_result: AutoMLResult | None = None
@@ -105,6 +104,7 @@ class AutopilotEngine:
             suggested_target=target,
             automl_result=automl_result,
             automl_message=automl_message,
+            outliers=outliers,
         )
 
     def _select_charts(self, frame: pd.DataFrame) -> tuple[list[ChartInsight], list[str]]:
@@ -133,7 +133,7 @@ class AutopilotEngine:
 
         if len(categorical) >= 2:
             hierarchy = categorical[:2]
-            counts = frame.groupby(hierarchy, dropna=False).size().reset_index(name="Kayıt Sayısı")
+            counts = frame.groupby(hierarchy).size().reset_index(name="Kayıt Sayısı")
             counts = counts.sort_values("Kayıt Sayısı", ascending=False).head(15)
             add(
                 "Hiyerarşik Güneş Patlaması",
