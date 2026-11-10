@@ -610,19 +610,25 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
         if figures:
             story.append(para("Öne Çıkan Grafikler", h2))
         budget = 6 - int(bool(report.model and report.model.top_features))
-        exported = 0
+        exported = fallbacks = 0
         for chart_summary, figure in zip(report.charts, figures):
             if exported >= budget:
                 break
             if not can_export(figure):
                 continue
             png = chart_png(figure)
+            fallbacks += int(getattr(png, "fallback", False))
             story.append(KeepTogether([
                 para(chart_summary.title, h3),
                 Image(BytesIO(png), width=content_width, height=content_width * 0.56),
                 para(chart_summary.insight, note),
             ]))
             exported += 1
+        if fallbacks:
+            story.append(para(
+                f"Not: {fallbacks} grafik birincil çizici (Kaleido) kullanılamadığı için yedek çizici (Matplotlib) "
+                "ile üretildi; görünümü HTML rapordaki etkileşimli grafikten farklı olabilir.", note,
+            ))
         story.append(para("Öne Çıkan Bulgular", h2))
         story += bullets([f"{chart.title}: {chart.insight}" for chart in report.charts])
         story.append(para("Etkileşimli grafikler HTML raporunda yer alır.", note))
