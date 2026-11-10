@@ -16,12 +16,6 @@ ISO_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # ANALIZ.md'deki henüz düzeltilmemiş hataların testleri. Her düzeltmede ilgili satır silinir.
 KNOWN_FAILURES: dict[str, list[str]] = {
-    "K3": [
-        "test_pii_patterns_are_masked", "test_numeric_id_column_does_not_leak_min_max",
-        "test_sensitive_columns_are_fully_masked", "test_sample_dataset_card_contains_no_customer_names",
-        "test_high_cardinality_text_is_shape_masked", "test_pii_in_column_name_is_masked",
-        "test_chat_prompt_masks_pii_in_question",
-    ],
     "Y3": [
         "test_measurement_columns_are_kept_as_features", "test_column_containing_id_substring_can_be_target",
         "test_regression_learns_known_signal",
