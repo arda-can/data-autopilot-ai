@@ -24,6 +24,8 @@ class CategoryVariantFinding(BaseModel):
     # Ham değerler rapora taşınmaz; yalnızca toplulaştırılmış sayılar tutulur.
 
 
+_MAX_CATEGORY_VARIANT_VALUES = 5_000
+
 _NONNEGATIVE_TOKENS = frozenset({
     "yaş", "yas", "age", "fiyat", "price", "adet", "miktar", "quantity", "qty",
     "count", "sayı", "sayisi", "sayısı", "ücret", "ucret", "tutar", "harcama",
@@ -87,6 +89,10 @@ class DataHealthAnalyzer:
         for column in frame.columns:
             series = frame[column]
             if is_identifier_name(column) or not (is_text_series(series) or isinstance(series.dtype, pd.CategoricalDtype)):
+                continue
+            # Çok benzersiz değerli sütunlar (serbest metin, hash) kategori değildir; Python döngüsü
+            # milyon satırda dakikalar sürer, bu yüzden hiç taranmaz.
+            if series.nunique(dropna=True) > _MAX_CATEGORY_VARIANT_VALUES:
                 continue
             counts = series.dropna().value_counts()
             groups: dict[str, list[int]] = {}
