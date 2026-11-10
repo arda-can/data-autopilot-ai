@@ -662,12 +662,15 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
                 f"Not: {fallbacks} grafik birincil çizici (Kaleido) kullanılamadığı için yedek çizici (Matplotlib) "
                 "ile üretildi; görünümü HTML rapordaki etkileşimli grafikten farklı olabilir.", note,
             ))
-        story.append(para("Öne Çıkan Bulgular", h2))
-        # 3B, paralel koordinat veya sınır dışı kalan grafikler PDF'te yok; okur nerede bulacağını bilmeli.
-        story += bullets([
-            f"{chart.title}: {chart.insight}" + ("" if position in shown else " (grafiği HTML raporunda)")
-            for position, chart in enumerate(report.charts)
-        ])
+        # Görseli basılan grafiğin bulgusu zaten altında yazıyor; burada tekrar edilmez. Geriye yalnızca
+        # PDF'e girmeyen grafikler (3B, paralel koordinat, sınır dışı) kalır ve nerede bulunacağı belirtilir.
+        remaining = [
+            f"{chart.title}: {chart.insight} (grafiği HTML raporunda)"
+            for position, chart in enumerate(report.charts) if position not in shown
+        ]
+        if remaining:
+            story.append(para("Diğer Bulgular" if shown else "Öne Çıkan Bulgular", h2))
+            story += bullets(remaining)
         story.append(para("Etkileşimli grafikler HTML raporunda yer alır.", note))
     if "actions" in tables:
         story += [para("Uygulanan İşlemler", h2), table(*tables["actions"], widths=[0.22, 0.22, 0.44, 0.12])]
