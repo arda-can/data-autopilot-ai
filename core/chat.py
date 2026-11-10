@@ -182,6 +182,12 @@ class DataChatEngine:
                 bin_count = min(10, max(1, values.nunique()))
                 bins = pd.cut(values, bins=bin_count, include_lowest=True, duplicates="drop")
                 result = bins.value_counts(sort=False).rename_axis("Aralık").reset_index(name="Sayı")
+                # Yalnızca sunum etiketleri değişir; pd.cut sınırları ve frekanslar korunur.
+                result["Aralık"] = result["Aralık"].map(
+                    lambda interval: f"({interval.left:,.3f} … {interval.right:,.3f}]".translate(
+                        str.maketrans({",": ".", ".": ","})
+                    )
+                )
             else:
                 result = values.value_counts().rename_axis(histogram_col).reset_index(name="Sayı")
             figure = px.histogram(
