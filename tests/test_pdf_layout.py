@@ -63,3 +63,23 @@ def test_extracted_text_keeps_one_bullet_per_line(tmp_path, dirty_result: Autopi
     ).stdout.decode("utf-8")
     assert "•" in text
     assert not [line for line in text.splitlines() if line.count("•") > 1 or re.search(r"\S ?• ", line)]
+
+
+def _report_with_charts(result: AutopilotResult, figures: list) -> object:
+    report = build_report(result, "test.csv")
+    report.charts = [ReportChart(title=f"Grafik {index}", reason="", insight=f"bulgu {index}.") for index in range(len(figures))]
+    return report
+
+
+def test_findings_of_charts_missing_from_pdf_point_to_html(monkeypatch: pytest.MonkeyPatch, dirty_result: AutopilotResult) -> None:
+    figures = [
+        px.scatter(x=[1, 2], y=[3, 4]),
+        px.scatter_3d(x=[1, 2], y=[2, 3], z=[3, 4]),
+        px.parallel_coordinates(pd.DataFrame({"a": [1, 2], "b": [2, 3]})),
+    ]
+    story = _story(monkeypatch)
+    render_pdf(_report_with_charts(dirty_result, figures), figures)
+    texts = _texts(story)
+    assert "• Grafik 1: bulgu 1. (grafiği HTML raporunda)" in texts
+    assert "• Grafik 2: bulgu 2. (grafiği HTML raporunda)" in texts
+    assert not any("Grafik 0" in text and "HTML raporunda" in text for text in texts)
