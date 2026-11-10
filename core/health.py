@@ -141,7 +141,9 @@ class DataHealthAnalyzer:
                 continue
             lower, upper = q1 - multiplier * iqr, q3 + multiplier * iqr
             if method == LOG_METHOD:
-                lower, upper = float(np.expm1(lower)), float(np.expm1(upper))
+                # Sağa çarpık, negatifsiz bir ölçüde şüpheli olan uzun kuyruktur. Sıfıra yakın küçük
+                # değerler (küçük ödeme, tek taksit) olağandır; alt taraf aykırı sayılmaz.
+                lower, upper = 0.0, float(np.expm1(upper))
             # Negatif olamayan bir ölçü için "beklenen aralık" sıfırın altına inemez: ya ad bunu söyler
             # (yaş, tutar, taksit) ya da veride hiç negatif değer yoktur.
             if lower < 0 and (is_nonnegative_name(column) or values.min() >= 0):

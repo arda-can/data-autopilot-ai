@@ -197,3 +197,15 @@ def test_no_findings_section_when_every_chart_is_shown(monkeypatch: pytest.Monke
     render_pdf(_report_with_charts(dirty_result, figures), figures)
     texts = _texts(story)
     assert "Diğer Bulgular" not in texts and "Öne Çıkan Bulgular" not in texts
+
+
+def test_log_scale_iqr_flags_only_the_upper_tail() -> None:
+    frame = _skewed_frame()
+    values = frame["payment_value"]
+    finding = {item.column: item for item in DataHealthAnalyzer().find_outliers(frame)}["payment_value"]
+    assert finding.method == "IQR (log ölçek)" and finding.lower_bound == 0
+    assert finding.min == 0                                    # sıfırlar veride duruyor ama aykırı sayılmıyor
+    assert finding.count == int((values > finding.upper_bound).sum())
+    report = build_report(AutopilotEngine().run_full_autopilot(frame), "test.csv")
+    advice = next(item for item in report.recommendations if "payment_value" in item and "uç değer" in item)
+    assert "en büyük değer" in advice and "en küçük değer" not in advice
