@@ -2,10 +2,33 @@
 
 from __future__ import annotations
 
+import unicodedata
+
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from core.columns import is_identifier_name, is_text_series, numeric_text_ratio
+from core.columns import is_identifier_name, is_text_series, name_tokens, numeric_text_ratio
+from core.formatting import decimal_tr
+
+
+class DomainFinding(BaseModel):
+    column: str
+    count: int
+    rule: str = "Negatif değer içermemeli."
+
+
+class CategoryVariantFinding(BaseModel):
+    column: str
+    group_count: int
+    affected_count: int
+    # Ham değerler rapora taşınmaz; yalnızca toplulaştırılmış sayılar tutulur.
+
+
+_NONNEGATIVE_TOKENS = frozenset({
+    "yaş", "yas", "age", "fiyat", "price", "adet", "miktar", "quantity", "qty",
+    "count", "sayı", "sayisi", "sayısı", "ücret", "ucret", "tutar", "harcama",
+    "cost", "fee", "stok", "stock", "freight",
+})
 
 
 class ColumnHealth(BaseModel):
@@ -30,6 +53,8 @@ class HealthReport(BaseModel):
     kirli_sayısal_sütunlar: list[str]
     sorunlar: list[str]
     sütun_raporları: list[ColumnHealth]
+    domain_findings: list[DomainFinding] = Field(default_factory=list)
+    category_variants: list[CategoryVariantFinding] = Field(default_factory=list)
 
 
 class OutlierFinding(BaseModel):
@@ -46,6 +71,38 @@ class OutlierFinding(BaseModel):
 
 class DataHealthAnalyzer:
     """DataFrame üzerinde yalnızca gözlemlenebilir kalite metrikleri hesaplar."""
+
+    def find_domain_violations(self, frame: pd.DataFrame) -> list[DomainFinding]:
+        findings = []
+        for column in frame.select_dtypes(include="number").columns:
+            if is_identifier_name(column) or not set(name_tokens(column)) & _NONNEGATIVE_TOKENS:
+                continue
+            count = int((frame[column] < 0).sum())
+            if count:
+                findings.append(DomainFinding(column=str(column), count=count))
+        return findings
+
+    def find_category_variants(self, frame: pd.DataFrame) -> list[CategoryVariantFinding]:
+        findings = []
+        for column in frame.columns:
+            series = frame[column]
+            if is_identifier_name(column) or not (is_text_series(series) or isinstance(series.dtype, pd.CategoricalDtype)):
+                continue
+            counts = series.dropna().value_counts()
+            groups: dict[str, list[int]] = {}
+            for value, count in counts.items():
+                if not isinstance(value, str) or not count:
+                    continue
+                folded = unicodedata.normalize("NFKD", value.casefold())
+                key = "".join(char for char in folded if not unicodedata.combining(char))
+                groups.setdefault(key, []).append(int(count))
+            duplicates = [counts for counts in groups.values() if len(counts) > 1]
+            if duplicates:
+                findings.append(CategoryVariantFinding(
+                    column=str(column), group_count=len(duplicates),
+                    affected_count=sum(sum(counts) for counts in duplicates),
+                ))
+        return findings
 
     def find_outliers(self, frame: pd.DataFrame, multiplier: float = 1.5) -> list[OutlierFinding]:
         """Sürekli sayısal sütunlardaki şüpheli uç değerleri bulur; kimlik ve ayrık ölçekleri atlar."""
@@ -112,7 +169,7 @@ class DataHealthAnalyzer:
         score = round(max(0.0, 100.0 - penalties), 2)
         issues = []
         if missing_ratio:
-            issues.append(f"Toplam eksik veri oranı %{missing_ratio * 100:.2f}.")
+            issues.append(f"Toplam eksik veri oranı %{decimal_tr(missing_ratio * 100, 2)}.")
         if constant:
             issues.append(f"Sabit sütunlar: {', '.join(constant)}.")
         if high_null:
@@ -123,6 +180,12 @@ class DataHealthAnalyzer:
             issues.append(f"Olası kimlik sütunları: {', '.join(possible_ids)}.")
         if dirty_numeric:
             issues.append(f"Kirli sayısal sütunlar: {', '.join(dirty_numeric)}.")
+        domain_findings = self.find_domain_violations(frame)
+        category_variants = self.find_category_variants(frame)
+        for finding in domain_findings:
+            issues.append(f"{finding.column}: {finding.count} negatif değer şüpheli; alan kuralı gereği negatif olmamalı. Değerler değiştirilmedi.")
+        for finding in category_variants:
+            issues.append(f"{finding.column}: aksan veya büyük/küçük harf farkıyla oluşmuş {finding.group_count} olası kategori kopyası grubu ({finding.affected_count} kayıt). Birleştirme öncesinde incelenmesi önerilir; değerler değiştirilmedi.")
         return HealthReport(
             kalite_skoru=score, satır_sayısı=rows, sütun_sayısı=columns,
             eksik_veri_oranı=round(missing_ratio, 4), mükerrer_satır_sayısı=duplicates,
@@ -130,4 +193,5 @@ class DataHealthAnalyzer:
             olası_id_sütunları=possible_ids, kirli_sayısal_sütunlar=dirty_numeric,
             sorunlar=issues or ["Belirgin bir kalite sorunu tespit edilmedi."],
             sütun_raporları=column_reports,
+            domain_findings=domain_findings, category_variants=category_variants,
         )
