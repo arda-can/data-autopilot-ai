@@ -44,6 +44,7 @@ class ReportChart(BaseModel):
     title: str
     reason: str
     insight: str
+    sample_size: int | None = None
 
 
 class ReportFeature(BaseModel):
@@ -244,7 +245,10 @@ def build_report(
         ],
         missing_columns=missing_columns,
         outliers=outliers,
-        charts=[ReportChart(title=chart.title, reason=chart.reason, insight=chart.insight) for chart in result.charts],
+        charts=[
+            ReportChart(title=chart.title, reason=chart.reason, insight=chart.insight, sample_size=chart.sample_size)
+            for chart in result.charts
+        ],
         model=model,
         model_message=result.automl_message,
     )
@@ -383,7 +387,9 @@ def render_html(
             parts.append(
                 f'<article class="chart"><h3>{escape(chart.title)}</h3>{plot(figure)}'
                 f"<p><strong>Neden seçildi:</strong> {escape(chart.reason)}</p>"
-                f"<p><strong>Bulgu:</strong> {escape(chart.insight)}</p></article>"
+                f"<p><strong>Bulgu:</strong> {escape(chart.insight)}</p>"
+                + (f'<p class="note">{escape(_sample_note(chart.sample_size))}</p>' if chart.sample_size else "")
+                + "</article>"
             )
         parts.append("</div></section>")
 
@@ -435,6 +441,10 @@ _LOG_NOTE = (
     "IQR (log ölçek): çarpıklığı 2'den büyük ve negatif değer içermeyen sütunlarda beklenen aralık "
     "log ölçekte hesaplanır; doğrusal ölçek bu sütunlarda uzun kuyruğun tamamını aykırı sayar."
 )
+def _sample_note(size: int) -> str:
+    return f"Not: grafik, verinin tamamı yerine {_int(size)} satırlık rastgele örneklemle çizildi."
+
+
 _BULLET_GAP = 14  # punto; bir gövde satırı kadar. 11 ve altında pdftotext maddeleri hâlâ birleştiriyor (ölçüldü).
 
 _TURKISH_PROBE ="ğşıİĞŞöüçÖÜÇ"
@@ -638,6 +648,7 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
                 para(chart_summary.title, h3),
                 Image(BytesIO(png), width=content_width, height=content_width * 0.56),
                 para(chart_summary.insight, note),
+                *([para(_sample_note(chart_summary.sample_size), note)] if chart_summary.sample_size else []),
             ]))
             exported += 1
             shown.add(position)

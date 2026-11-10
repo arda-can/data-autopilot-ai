@@ -28,6 +28,7 @@ class ChartInsight:
     reason: str
     insight: str
     figure: Any
+    sample_size: int | None = None  # grafik tüm veri yerine örneklemle çizildiyse satır sayısı
 
 
 @dataclass
@@ -131,8 +132,10 @@ class AutopilotEngine:
         # Renk/eksen kırılımı için yalnızca az sınıflı kategori: onlarca sınıf lejantı grafiğin önüne geçirir.
         legend_category = next((column for column in categorical if frame[column].nunique() <= 12), None)
 
-        def add(title: str, reason: str, insight: str, figure: Any) -> None:
-            charts.append(ChartInsight(title, reason, insight, localize_figure(figure)))
+        sampled = len(sample) < len(frame)
+
+        def add(title: str, reason: str, insight: str, figure: Any, sample_size: int | None = None) -> None:
+            charts.append(ChartInsight(title, reason, insight, localize_figure(figure), sample_size))
             insights.append(insight)
 
         if len(categorical) >= 2:
@@ -192,7 +195,8 @@ class AutopilotEngine:
                 f"{', '.join(axes)} birlikte incelenerek çok boyutlu aykırı ve grup yapısı görülebilir.",
                 px.scatter_3d(scatter3, x=axes[0], y=axes[1], z=axes[2], color=color,
                               color_discrete_sequence=px.colors.qualitative.Bold,
-                              title="3D metrik uzayı"))
+                              title="3D metrik uzayı"),
+                sample_size=len(scatter3) if sampled else None)
         if len(numeric) >= 3:
             correlation = frame[numeric].corr()
             add("Korelasyon Isı Haritası", "Üç veya daha fazla güvenli sayısal metrik bulundu.",
@@ -210,7 +214,8 @@ class AutopilotEngine:
                 add("2B Yoğunluk Kontur Haritası", "En güçlü sayısal ilişkinin yoğunluk merkezleri seçildi.",
                     f"{pair[0]} ve {pair[1]} arasındaki yoğun bölgeler ve saçılım gösterildi.",
                     px.density_contour(density, x=pair[0], y=pair[1], marginal_x="histogram",
-                                       marginal_y="violin"))
+                                       marginal_y="violin"),
+                    sample_size=len(density) if sampled else None)
 
         if numeric:
             value = ranked_numeric[0]
@@ -222,18 +227,21 @@ class AutopilotEngine:
                 f"{value} dağılımı {shape}; çarpıklık {decimal_tr(skew, 2)}, basıklık {decimal_tr(kurtosis, 2)}.",
                 px.violin(violin_frame, y=value, x=legend_category,
                           color=legend_category, box=True, points="outliers",
-                          color_discrete_sequence=px.colors.qualitative.Bold, title=f"{value} keman dağılımı"))
+                          color_discrete_sequence=px.colors.qualitative.Bold, title=f"{value} keman dağılımı"),
+                sample_size=len(violin_frame) if sampled else None)
 
         if len(numeric) >= 4:
             parallel = frame[numeric[:6]].dropna()
-            if len(parallel) > 2000:
+            parallel_sampled = len(parallel) > 2000
+            if parallel_sampled:
                 parallel = parallel.sample(2000, random_state=self.random_state)
             parallel = parallel.copy()
             parallel["Profil"] = parallel[numeric[0]]
             add("Paralel Koordinatlar", "Dört veya daha fazla güvenli metrik arasındaki çoklu akış seçildi.",
                 "Kayıtların metrikler boyunca izlediği profil ve ayrışmalar gösterildi.",
                 px.parallel_coordinates(parallel, color="Profil", dimensions=numeric[:6],
-                                         color_continuous_scale=palette))
+                                         color_continuous_scale=palette),
+                sample_size=len(parallel) if parallel_sampled else None)
 
         if dates:
             date_column = dates[0]

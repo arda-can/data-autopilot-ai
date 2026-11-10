@@ -133,3 +133,22 @@ def test_report_states_log_scale(monkeypatch: pytest.MonkeyPatch) -> None:
     story = _story(monkeypatch)
     render_pdf(report)
     assert any(text.startswith("IQR (log ölçek): çarpıklığı 2'den büyük") for text in _texts(story))
+
+
+def test_sampled_charts_carry_a_sample_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    rng = np.random.default_rng(9)
+    width = rng.normal(30, 8, 4000)
+    frame = pd.DataFrame({"genişlik": width, "fiyat": 3 * width + rng.normal(0, 5, 4000), "grup": rng.choice(["a", "b"], 4000)})
+    result = AutopilotEngine().run_full_autopilot(frame)
+    sizes = {chart.title: chart.sample_size for chart in result.charts}
+    assert sizes["2B Yoğunluk Kontur Haritası"] == 2500 and sizes["Violin ve Çarpıklık Analizi"] == 2500
+    report = build_report(result, "test.csv")
+    story = _story(monkeypatch)
+    render_pdf(report, [chart.figure for chart in result.charts])
+    notes = [text for text in _texts(story) if "2.500 satırlık rastgele örneklemle" in text]
+    assert len(notes) == sum(1 for size in sizes.values() if size)
+    assert "2.500 satırlık rastgele örneklemle" in render_html(report, [chart.figure for chart in result.charts], embed_plotly=False)
+
+
+def test_small_data_charts_have_no_sample_note(dirty_result: AutopilotResult) -> None:
+    assert all(chart.sample_size is None for chart in dirty_result.charts)
