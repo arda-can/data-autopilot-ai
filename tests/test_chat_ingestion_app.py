@@ -52,6 +52,7 @@ def test_app_runs_end_to_end() -> None:
     app.sidebar.selectbox[0].select("kirli_musteri_verisi.csv").run()
     assert not app.exception and not app.error
     assert any("Yönetici Özeti" in header.value for header in app.header)
+    assert any("negatif değer" in warning.value for warning in app.warning)
     app.text_input(key="autopilot_chat_question").set_value("Şehirlere göre ortalama harcama nedir?")
     app.button(key="autopilot_chat_button").click().run()
     assert not app.exception and not app.error
