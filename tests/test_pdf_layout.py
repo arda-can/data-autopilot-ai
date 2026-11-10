@@ -152,3 +152,29 @@ def test_sampled_charts_carry_a_sample_note(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_small_data_charts_have_no_sample_note(dirty_result: AutopilotResult) -> None:
     assert all(chart.sample_size is None for chart in dirty_result.charts)
+
+
+def test_charts_flow_three_per_page_without_forced_breaks(monkeypatch: pytest.MonkeyPatch, dirty_result: AutopilotResult) -> None:
+    from reportlab.platypus import PageBreak
+
+    figures = [px.scatter(x=[1, 2, 3], y=[3, 1, 2]) for _ in range(6)]
+    report = _report_with_charts(dirty_result, figures)
+    without_charts = _page_count(render_pdf(report))
+    story = _story(monkeypatch)
+    with_charts = _page_count(render_pdf(report, figures))
+    shown = 6 - int(bool(report.model and report.model.top_features))
+    assert not any(isinstance(item, PageBreak) for item in story)
+    assert with_charts - without_charts <= -(-shown // 3)
+    # Ardışık üç grafik bloğu (başlık + görsel + not) tek bir A4 sayfasının kullanılabilir alanına sığar.
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Image, KeepTogether
+
+    blocks = [item for item in story if isinstance(item, KeepTogether) and any(isinstance(child, Image) for child in item._content)]
+    assert len(blocks) == shown
+    usable_width, usable_height = A4[0] - 36 * mm - 12, A4[1] - 32 * mm - 12
+    heights = [
+        sum(child.wrap(usable_width, usable_height)[1] + child.getSpaceBefore() + child.getSpaceAfter() for child in block._content)
+        for block in blocks[1:4]
+    ]
+    assert sum(heights) <= usable_height
