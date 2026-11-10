@@ -23,6 +23,7 @@ from sklearn.base import clone
 from sklearn.inspection import permutation_importance
 
 from core.columns import is_identifier_name, parse_datetime_text
+from core.formatting import localize_figure
 
 
 @dataclass
@@ -132,7 +133,7 @@ class AutoMLEngine:
             title=f"{best_model} - Özellik Önem Düzeyleri",
         )
         return AutoMLResult(
-            problem_type, leaderboard, best_model, importance, figure,
+            problem_type, leaderboard, best_model, importance, localize_figure(figure),
             metric=sort_column, baseline_model=baseline_name, baseline_score=baseline_score,
             best_score=best_score, beats_baseline=beats_baseline, verdict=verdict,
         )

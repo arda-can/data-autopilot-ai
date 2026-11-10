@@ -16,6 +16,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from core.automl import AutoMLEngine, AutoMLResult
 from core.columns import is_geo_coordinate_name, is_identifier_column
 from core.executor import ActionExecutor, AuditLog
+from core.formatting import decimal_tr, localize_figure
 from core.health import DataHealthAnalyzer, HealthReport, OutlierFinding
 from core.metadata import DatasetMetadataCard, MetadataGenerator
 from core.planner import STATISTICAL_ACTIONS, GeminiPlanner
@@ -131,7 +132,7 @@ class AutopilotEngine:
         legend_category = next((column for column in categorical if frame[column].nunique() <= 12), None)
 
         def add(title: str, reason: str, insight: str, figure: Any) -> None:
-            charts.append(ChartInsight(title, reason, insight, figure))
+            charts.append(ChartInsight(title, reason, insight, localize_figure(figure)))
             insights.append(insight)
 
         if len(categorical) >= 2:
@@ -163,7 +164,7 @@ class AutopilotEngine:
             add(
                 "Yapay Zeka Kümeleme Haritası",
                 "Üç veya daha fazla metrik PCA ve KMeans ile otomatik segmentlere ayrıldı.",
-                f"Üç küme bulundu; ilk iki temel bileşen toplam varyansın %{explained:.1f} oranını açıklıyor.",
+                f"Üç küme bulundu; ilk iki temel bileşen toplam varyansın %{decimal_tr(explained)} oranını açıklıyor.",
                 px.scatter(pca_frame, x="PC1", y="PC2", color="Küme", symbol="Küme",
                            color_discrete_sequence=px.colors.qualitative.Bold,
                            title="PCA + KMeans segmentasyonu"),
@@ -192,9 +193,9 @@ class AutopilotEngine:
                 px.scatter_3d(scatter3, x=axes[0], y=axes[1], z=axes[2], color=color,
                               color_discrete_sequence=px.colors.qualitative.Bold,
                               title="3D metrik uzayı"))
-        elif len(numeric) >= 2:
+        if len(numeric) >= 3:
             correlation = frame[numeric].corr()
-            add("Korelasyon Isı Haritası", "İki veya daha fazla güvenli sayısal metrik bulundu.",
+            add("Korelasyon Isı Haritası", "Üç veya daha fazla güvenli sayısal metrik bulundu.",
                 "Sayısal metrikler arasındaki doğrusal ilişkiler birlikte incelendi.",
                 px.imshow(correlation.round(2), text_auto=True, color_continuous_scale=palette))
 
@@ -218,13 +219,16 @@ class AutopilotEngine:
             kurtosis = float(frame[value].kurtosis())
             shape = "sağa çarpık" if skew > 0.5 else ("sola çarpık" if skew < -0.5 else "simetrik")
             add("Violin ve Çarpıklık Analizi", "En değişken güvenli metrik için dağılımın tamamı seçildi.",
-                f"{value} dağılımı {shape}; çarpıklık {skew:.2f}, basıklık {kurtosis:.2f}.",
+                f"{value} dağılımı {shape}; çarpıklık {decimal_tr(skew, 2)}, basıklık {decimal_tr(kurtosis, 2)}.",
                 px.violin(violin_frame, y=value, x=legend_category,
                           color=legend_category, box=True, points="outliers",
                           color_discrete_sequence=px.colors.qualitative.Bold, title=f"{value} keman dağılımı"))
 
         if len(numeric) >= 4:
-            parallel = sample[numeric[:6]].dropna().copy()
+            parallel = frame[numeric[:6]].dropna()
+            if len(parallel) > 2000:
+                parallel = parallel.sample(2000, random_state=self.random_state)
+            parallel = parallel.copy()
             parallel["Profil"] = parallel[numeric[0]]
             add("Paralel Koordinatlar", "Dört veya daha fazla güvenli metrik arasındaki çoklu akış seçildi.",
                 "Kayıtların metrikler boyunca izlediği profil ve ayrışmalar gösterildi.",
@@ -251,7 +255,10 @@ class AutopilotEngine:
                 f"{column} değerleri alan büyüklükleriyle karşılaştırıldı.",
                 px.treemap(counts, path=[column], values="Sayı", color="Sayı", color_continuous_scale=palette))
 
-        return charts[:6], insights
+        # Isı haritası ve örneklemli paralel koordinatlar altı grafik sınırında da görünür kalır.
+        priority = {"Korelasyon Isı Haritası": 0, "Paralel Koordinatlar": 1}
+        selected = sorted(charts, key=lambda chart: priority.get(chart.title, 2))[:6]
+        return selected, [chart.insight for chart in selected]
 
     @staticmethod
     def _is_identifier(frame: pd.DataFrame, column: str) -> bool:

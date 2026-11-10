@@ -10,6 +10,7 @@ import plotly.express as px
 from pydantic import BaseModel, Field
 
 from core.metadata import DatasetMetadataCard, MetadataGenerator
+from core.formatting import localize_figure
 
 
 class StructuredDataQuery(BaseModel):
@@ -52,7 +53,7 @@ class DataChatEngine:
         card = metadata or MetadataGenerator().generate(frame)
         query = self._plan(question, card, frame)
         result, summary, figure = self._execute(frame, query)
-        return result, summary, figure, query
+        return result, summary, localize_figure(figure), query
 
     def _plan(
         self,
