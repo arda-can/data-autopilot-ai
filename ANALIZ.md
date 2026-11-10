@@ -343,6 +343,26 @@ Tasarım ilkeleri:
 
 ## 5. Önceliklendirilmiş yol haritası
 
+### 5.0 Güncel durum ve sıradaki beş özellik (10 Kasım 2026 akşamı)
+
+Aşağıdaki özgün tablodan tamamlananlar: 1-8, 13, 16 (PDF kademesi), 20 (CI) ve 21'in bir bölümü (Türkçe sayı biçimi, `width` parametresi, alan kuralı ve kategori kopyası bulguları, açıklayıcı audit gerekçeleri). PDF raporu gerçek Olist ödeme verisiyle sayfa sayfa gözden geçirildi; log ölçekli IQR, sıfıra sabitlenen alt sınır, örneklem notu ve sayfaya üç grafik bu gözden geçirmeden çıktı.
+
+Sıralama ölçütü: "bunu bir veri analisti işverenine gösteriyorum". Analist rolünde model açıklamaktan çok zaman içindeki değişimi okumak, tabloları birleştirmek ve soruya sayıyla cevap vermek sorulur; bu yüzden drift öne, PDP sona alındı.
+
+| Sıra | Özellik | Ne işe yarar | Demoda / mülakatta | Efor | Yeni bağımlılık |
+|---|---|---|---|---|---|
+| 1 | **Zaman serisi otopilotu** | Tarih sütunu bulununca trend, mevsimsellik ve güven bantlı tahmin; "geçen dönemin aynısı" tabanıyla geriye dönük test | Olist siparişlerinde tek tıkla aylık trend ve tahmin; "modelim naif tahmini geçiyor mu" sorusuna hazır cevap | M | `statsmodels` (ön onaylı) |
+| 2 | **Dönem karşılaştırması (drift)** | İki dönem veya iki dosya arasında neyin değiştiğini söyler: şema, eksik oranı, dağılım kayması (PSI, KS, ki-kare), trafik ışığı tablosu | "2017 ile 2018 arasında ne değişti?" tek tıkla; analistin her ay yaptığı işin otomatiği | S-M | `scipy` (kurulu, `requirements.txt`'e açıkça eklenmeli) |
+| 3 | **Çoklu tablo keşfi ve birleştirme** | `data/` içindeki tablolar arasında ortak anahtarları bulur, ilişki şemasını çizer, onaylanan birleştirmeyi uygular | Olist'in 9 tablosu tek modele bağlanır; "teslimat gecikmesi yorum puanını nasıl etkiliyor" sorulabilir hale gelir. SQL/ilişkisel düşünceyi gösterir | L | Yok |
+| 4 | **Sohbette filtre, tarih kırılımı ve sorgu şeffaflığı** | Sorulara "2018'de", "İstanbul için", "aylık" gibi koşullar; her cevabın altında eşdeğer pandas ve SQL sorgusu | Mülakatçı kendi sorusunu sorar ve cevabın nasıl hesaplandığını görür; kara kutu olmadığını kanıtlar | M | Yok |
+| 5 | **PDP açıklanabilirlik ve what-if paneli** | En etkili değişkenlerin tahmini nasıl değiştirdiğini gösterir; kaydırıcıyla tek satır tahmini | "Model neden böyle dedi" sorusunun cevabı; etkileşimli an. Analist rolünde ilk dördün gerisinde kalır | M | Yok (sklearn) |
+
+Liste dışı ama en ucuz kazanım: README'ye demo GIF'i ve Streamlit Community Cloud yayını (S, bağımlılıksız). Özellik değil, ama işverenin depoyu klonlamadan görebildiği tek şey bu.
+
+Bilinçli olarak geriye bırakılanlar: Python API / sesli asistan arayüzü (özgün tabloda 12) analist işvereni için görünür değer üretmez; LLM planı korkulukları (9) Gemini yolu test edilmeden vitrine çıkmamalı; Word raporu (16, kademe 2) PDF varken düşük öncelikli.
+
+### 5.1 Özgün tablo (sprint öncesi)
+
 Sıra: önce kritik düzeltmeler, sonra etki/efor oranı. Efor: S ≈ 1 saatten az, M ≈ yarım gün, L ≈ birkaç gün.
 
 | # | Başlık | Etki (portföy/mülakat değeri dahil) | Efor | Risk | Bağımlılıklar |
