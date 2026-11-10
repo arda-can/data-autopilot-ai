@@ -179,3 +179,10 @@ def test_kaleido_failure_is_logged_and_noted_in_pdf(monkeypatch, caplog, dirty_r
 def test_successful_export_has_no_fallback_flag(monkeypatch) -> None:
     monkeypatch.setattr(go.Figure, "to_image", lambda self, **kwargs: b"\x89PNG-ok")
     assert chart_png(px.scatter(x=[1], y=[2])).fallback is False
+
+
+def test_category_variants_skip_high_cardinality_columns() -> None:
+    values = [f"deger {index}" for index in range(5_001)] + ["DEGER 0"]
+    frame = pd.DataFrame({"serbest_metin": values, "şehir": ["İzmir", "izmir"] * 2_501})
+    report = DataHealthAnalyzer().analyze(frame)
+    assert [finding.column for finding in report.category_variants] == ["şehir"]
