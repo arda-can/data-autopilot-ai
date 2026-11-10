@@ -41,6 +41,14 @@ def test_numeric_id_column_does_not_leak_min_max() -> None:
     assert "12345678901" not in card.model_dump_json()
 
 
+def test_long_integers_are_hidden_even_without_a_telling_name() -> None:
+    frame = pd.DataFrame({"deger": [5321234567, 5329876543, 5551112233], "enlem": [-23.54562128115268, 41.0, 39.9]})
+    card = MetadataGenerator().generate(frame)
+    by_name = {column.name: column for column in card.columns}
+    assert by_name["deger"].max is None and set(by_name["deger"].sample_values) == {MASK}
+    assert by_name["enlem"].sample_values[0] == "-23.5456" and by_name["enlem"].max == 41.0
+
+
 def test_sensitive_columns_are_fully_masked() -> None:
     frame = pd.DataFrame({
         "Ad Soyad": ["Ayşe Yılmaz", "Ali Çelik", "Can Öz"],

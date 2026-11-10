@@ -68,12 +68,7 @@ class DataChatEngine:
                 client = genai.Client(api_key=self.api_key)
                 response = client.models.generate_content(
                     model=self.model,
-                    contents=(
-                        "Türkçe kullanıcı sorusunu yalnızca aşağıdaki KVKK/PII maskeli "
-                        "metadata ile analiz et. Ham veri isteme veya üretme. Sadece "
-                        "doğrulanmış StructuredDataQuery JSON'u döndür.\n"
-                        f"Kullanıcı sorusu: {question}\nMetadata: {card.model_dump_json()}"
-                    ),
+                    contents=self._build_prompt(question, card),
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
                         response_schema=StructuredDataQuery,
@@ -88,6 +83,17 @@ class DataChatEngine:
             except Exception:
                 pass
         return self._fallback(question, frame)
+
+    @staticmethod
+    def _build_prompt(question: str, card: DatasetMetadataCard) -> str:
+        """LLM'e giden metin: soru da metadata gibi PII maskesinden geçer."""
+        return (
+            "Türkçe kullanıcı sorusunu yalnızca aşağıdaki KVKK/PII maskeli "
+            "metadata ile analiz et. Ham veri isteme veya üretme. Sadece "
+            "doğrulanmış StructuredDataQuery JSON'u döndür.\n"
+            f"Kullanıcı sorusu: {MetadataGenerator.mask_pii(question)}\n"
+            f"Metadata: {card.model_dump_json()}"
+        )
 
     @staticmethod
     def _normalize(value: str) -> str:
