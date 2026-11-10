@@ -29,8 +29,14 @@ _MAX_CATEGORY_VARIANT_VALUES = 5_000
 _NONNEGATIVE_TOKENS = frozenset({
     "yaş", "yas", "age", "fiyat", "price", "adet", "miktar", "quantity", "qty",
     "count", "sayı", "sayisi", "sayısı", "ücret", "ucret", "tutar", "harcama",
-    "cost", "fee", "stok", "stock", "freight",
+    "cost", "fee", "stok", "stock", "freight", "taksit", "installment", "installments",
+    "payment", "ödeme", "odeme", "weight", "ağırlık", "agirlik",
 })
+
+
+def is_nonnegative_name(name: object) -> bool:
+    """Sütun adı, doğası gereği negatif olamayan bir ölçüye (tutar, taksit, adet, yaş) işaret ediyor mu?"""
+    return bool(set(name_tokens(name)) & _NONNEGATIVE_TOKENS)
 
 
 class ColumnHealth(BaseModel):
@@ -77,7 +83,7 @@ class DataHealthAnalyzer:
     def find_domain_violations(self, frame: pd.DataFrame) -> list[DomainFinding]:
         findings = []
         for column in frame.select_dtypes(include="number").columns:
-            if is_identifier_name(column) or not set(name_tokens(column)) & _NONNEGATIVE_TOKENS:
+            if is_identifier_name(column) or not is_nonnegative_name(column):
                 continue
             count = int((frame[column] < 0).sum())
             if count:
@@ -122,6 +128,10 @@ class DataHealthAnalyzer:
             if not iqr > 0:
                 continue
             lower, upper = q1 - multiplier * iqr, q3 + multiplier * iqr
+            # Negatif olamayan bir ölçü için "beklenen aralık" sıfırın altına inemez: ya ad bunu söyler
+            # (yaş, tutar, taksit) ya da veride hiç negatif değer yoktur.
+            if lower < 0 and (is_nonnegative_name(column) or values.min() >= 0):
+                lower = 0.0
             count = int(((values < lower) | (values > upper)).sum())
             if count:
                 findings.append(OutlierFinding(

@@ -83,3 +83,19 @@ def test_findings_of_charts_missing_from_pdf_point_to_html(monkeypatch: pytest.M
     assert "• Grafik 1: bulgu 1. (grafiği HTML raporunda)" in texts
     assert "• Grafik 2: bulgu 2. (grafiği HTML raporunda)" in texts
     assert not any("Grafik 0" in text and "HTML raporunda" in text for text in texts)
+
+
+def test_expected_range_never_goes_below_zero_for_nonnegative_columns() -> None:
+    rng = np.random.default_rng(3)
+    frame = pd.DataFrame({
+        "payment_installments": np.r_[rng.integers(1, 11, 290), [48] * 10],
+        "ölçüm": np.r_[rng.exponential(50, 290), [5000] * 10],
+        "kar_zarar": np.r_[rng.normal(0, 10, 290), [900] * 10],
+        "Yaş": np.r_[rng.integers(20, 60, 298), [-5, 999]],
+    })
+    findings = {item.column: item for item in DataHealthAnalyzer().find_outliers(frame)}
+    assert findings["payment_installments"].lower_bound == 0
+    assert findings["ölçüm"].lower_bound == 0          # veride negatif yok
+    assert findings["kar_zarar"].lower_bound < 0       # negatif olabilen ölçü: sınır kırpılmaz
+    assert findings["Yaş"].lower_bound >= 0 and findings["Yaş"].min == -5
+    assert findings["Yaş"].count == 2                  # -5 artık alt sınırın dışında sayılır
