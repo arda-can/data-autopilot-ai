@@ -445,6 +445,7 @@ def _sample_note(size: int) -> str:
     return f"Not: grafik, verinin tamamı yerine {_int(size)} satırlık rastgele örneklemle çizildi."
 
 
+_PDF_CHART_WIDTH = 0.70  # içerik genişliğine oran; A4'te üç grafik + başlık + not bir sayfaya sığar
 _BULLET_GAP = 14  # punto; bir gövde satırı kadar. 11 ve altında pdftotext maddeleri hâlâ birleştiriyor (ölçüldü).
 
 _TURKISH_PROBE ="ğşıİĞŞöüçÖÜÇ"
@@ -632,8 +633,10 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
         if any(item.method == LOG_METHOD for item in report.outliers):
             story.append(para(_LOG_NOTE, note))
     if report.charts:
-        if figures:
-            story.append(para("Öne Çıkan Grafikler", h2))
+        # Görsel, sayfaya üç grafik sığacak boyutta; her grafik kendi başlığı ve notuyla bölünmeden akar,
+        # zorunlu sayfa sonu yoktur. Bölüm başlığı ilk grafikle aynı sayfada kalır.
+        image_width = content_width * _PDF_CHART_WIDTH
+        heading: list[Any] = [para("Öne Çıkan Grafikler", h2)]
         budget = 6 - int(bool(report.model and report.model.top_features))
         exported = fallbacks = 0
         shown: set[int] = set()  # PDF'te görseli basılan grafiklerin sırası
@@ -645,11 +648,13 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
             png = chart_png(figure)
             fallbacks += int(getattr(png, "fallback", False))
             story.append(KeepTogether([
+                *heading,
                 para(chart_summary.title, h3),
-                Image(BytesIO(png), width=content_width, height=content_width * 0.56),
+                Image(BytesIO(png), width=image_width, height=image_width * 0.56),
                 para(chart_summary.insight, note),
                 *([para(_sample_note(chart_summary.sample_size), note)] if chart_summary.sample_size else []),
             ]))
+            heading = []
             exported += 1
             shown.add(position)
         if fallbacks:
