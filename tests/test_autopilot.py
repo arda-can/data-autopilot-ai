@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
-from core.autopilot import AutopilotResult
+from core.autopilot import AutopilotEngine, AutopilotResult
+from core.planner import AnalysisPlan, ColumnPlan, GeminiPlanner
 from tests.conftest import ISO_FORMAT
 
 
@@ -46,6 +48,27 @@ def test_integer_score_target_is_classification(orders_result: AutopilotResult) 
     assert orders_result.suggested_target == "review_score"
     assert orders_result.automl_result is not None
     assert orders_result.automl_result.problem_type == "Classification"
+
+
+def test_outliers_are_reported_but_not_clipped(dirty_raw: pd.DataFrame, dirty_result: AutopilotResult) -> None:
+    assert dirty_result.cleaned_frame["Yaş"].max() == dirty_raw["Yaş"].max() == 999
+    finding = {item.column: item for item in dirty_result.outliers}["Yaş"]
+    assert finding.count >= 1 and finding.max == 999
+
+
+def test_statistical_plan_actions_are_not_executed(monkeypatch: pytest.MonkeyPatch, orders: pd.DataFrame) -> None:
+    plan = AnalysisPlan(domain="test", problem_type="test", actions=[
+        ColumnPlan(column="review_comment_message", action="impute_mode", reason="x"),
+        ColumnPlan(column="freight_value", action="impute_median", reason="x"),
+        ColumnPlan(column="price", action="cap_outliers_iqr", reason="x"),
+    ])
+    monkeypatch.setattr(GeminiPlanner, "create_plan", lambda self, frame, metadata=None: plan)
+    result = AutopilotEngine().run_full_autopilot(orders)
+    cleaned = result.cleaned_frame
+    assert int(cleaned["review_comment_message"].isna().sum()) == int(orders["review_comment_message"].isna().sum())
+    assert cleaned["price"].tolist() == orders["price"].tolist()
+    logged = {log.action for log in result.audit_logs}
+    assert not logged & {"Eksikleri mod ile doldur", "Eksikleri medyan ile doldur", "Aykırı değerleri sınırla"}
 
 
 def test_charts_are_produced(orders_result: AutopilotResult, dirty_result: AutopilotResult) -> None:

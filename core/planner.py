@@ -16,6 +16,10 @@ AllowedAction = Literal[
     "strip_whitespace", "keep_as_is",
 ]
 
+# Veriden istatistik öğrenen aksiyonlar. Otopilot bunları ön işlemede çalıştırmaz; aynı işi
+# modelleme hattı yalnızca eğitim bölmesi üzerinde yapar (.cursorrules madde 4).
+STATISTICAL_ACTIONS: frozenset[str] = frozenset({"impute_median", "impute_mode", "cap_outliers_iqr"})
+
 
 class ColumnPlan(BaseModel):
     column: str
@@ -49,7 +53,8 @@ class GeminiPlanner:
                 contents=(
                     "Aşağıdaki KVKK maskeli metadata kartına göre Türkçe, güvenli ve "
                     "deterministik bir veri temizleme planı üret. Yalnızca izin verilen "
-                    "aksiyonları kullan; ham veri isteme veya üretme.\n"
+                    "aksiyonları kullan; ham veri isteme veya üretme. Eksik doldurma ve "
+                    "aykırı değer sınırlama önerme; bunlar modelleme hattında yapılır.\n"
                     f"{card.model_dump_json()}"
                 ),
                 config=types.GenerateContentConfig(
@@ -76,15 +81,12 @@ class GeminiPlanner:
                 if any(token in samples for token in ("TL", "₺", "$", "€", "%")):
                     action = "parse_currency"
                     reason = "Örnek değerler para veya sayısal metin biçiminde."
-                elif column.null_ratio > 0:
-                    action = "impute_mode"
-                    reason = "Metin sütunundaki eksik değerler mod ile doldurulabilir."
                 else:
                     action = "strip_whitespace"
                     reason = "Metin değerlerinde standart boşluk temizliği uygulanabilir."
             elif column.null_ratio > 0:
-                action = "impute_median"
-                reason = "Sayısal eksik değerler medyan ile doldurulabilir."
+                action = "keep_as_is"
+                reason = "Eksik değerler korunur; doldurma yalnızca modelleme hattında eğitim verisinden öğrenilir."
             else:
                 action = "keep_as_is"
                 reason = "Belirgin bir deterministik dönüşüm gerekmiyor."

@@ -32,8 +32,41 @@ class HealthReport(BaseModel):
     sütun_raporları: list[ColumnHealth]
 
 
+class OutlierFinding(BaseModel):
+    """IQR sınırlarının dışında kalan değerlerin özeti. Yalnızca raporlanır, veri değiştirilmez."""
+
+    column: str
+    count: int
+    ratio: float
+    lower_bound: float
+    upper_bound: float
+    min: float
+    max: float
+
+
 class DataHealthAnalyzer:
     """DataFrame üzerinde yalnızca gözlemlenebilir kalite metrikleri hesaplar."""
+
+    def find_outliers(self, frame: pd.DataFrame, multiplier: float = 1.5) -> list[OutlierFinding]:
+        """Sürekli sayısal sütunlardaki şüpheli uç değerleri bulur; kimlik ve ayrık ölçekleri atlar."""
+        findings: list[OutlierFinding] = []
+        for column in frame.select_dtypes(include="number").columns:
+            values = frame[column].dropna()
+            if is_identifier_name(column) or values.nunique() < 10:
+                continue
+            q1, q3 = values.quantile([0.25, 0.75])
+            iqr = q3 - q1
+            if not iqr > 0:
+                continue
+            lower, upper = q1 - multiplier * iqr, q3 + multiplier * iqr
+            count = int(((values < lower) | (values > upper)).sum())
+            if count:
+                findings.append(OutlierFinding(
+                    column=str(column), count=count, ratio=round(count / len(values), 4),
+                    lower_bound=float(lower), upper_bound=float(upper),
+                    min=float(values.min()), max=float(values.max()),
+                ))
+        return findings
 
     def analyze(self, frame: pd.DataFrame) -> HealthReport:
         if not isinstance(frame, pd.DataFrame):

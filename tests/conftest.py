@@ -16,11 +16,6 @@ ISO_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # ANALIZ.md'deki henüz düzeltilmemiş hataların testleri. Her düzeltmede ilgili satır silinir.
 KNOWN_FAILURES: dict[str, list[str]] = {
-    "K2": [
-        "test_target_values_are_not_altered", "test_missing_values_are_not_fabricated",
-        "test_dates_are_parsed_correctly", "test_integer_score_target_is_classification",
-        "test_fallback_plan_never_proposes_statistical_actions",
-    ],
     "K3": [
         "test_pii_patterns_are_masked", "test_numeric_id_column_does_not_leak_min_max",
         "test_sensitive_columns_are_fully_masked", "test_sample_dataset_card_contains_no_customer_names",
