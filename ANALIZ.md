@@ -2,6 +2,25 @@
 
 **Tarih:** 10 Kasım 2026 · **Kapsam:** `app.py`, `core/` (9 modül, ~1.540 satır), `requirements.txt`, `.cursorrules`, `.github/`, `data/`
 
+## Durum (ilk sprint sonrası)
+
+Bu belge sprint öncesi durumu anlatır; aşağıdaki maddeler o tarihten sonra düzeltildi ve her biri regresyon testiyle korunuyor.
+
+| Madde | Durum | Not |
+|---|---|---|
+| K1 — kimlik/metin sütunlarının sayıya çevrilmesi | ✅ Düzeltildi | `core/columns.py::parse_numeric_text`, tam eşleşme ve TR/ABD biçim tespiti |
+| K2 — bölmeden önce doldurma ve IQR kırpma | ✅ Düzeltildi | Hijyenden çıkarıldı; aykırı değerler yalnızca raporlanıyor |
+| K3 — dar PII maskesi | ✅ Düzeltildi | Yeni desenler, hassas sütun gizleme, biçim maskesi, soru maskesi |
+| Y1 — ISO tarihlerde gün/ay takası | ✅ Düzeltildi | `parse_datetime_text` |
+| Y2 — pandas 3 dtype ve sürümsüz bağımlılıklar | ✅ Düzeltildi | `is_text_series`; sürümler sabitlendi |
+| Y3 — "id" alt dizesi | ✅ Düzeltildi | `is_identifier_name`, tek yerde ve kelime eşleşmesiyle |
+| Y5 — test, git, README, CI | ✅ Düzeltildi | pytest, GitHub Actions (henüz push edilmedi) |
+| O5 — baştaki sıfır kaybı | ◐ Kısmen | Metin olarak okunan kodlar artık korunuyor; okuma sırasında sayıya dönüşenler hâlâ açık |
+| D3 — ölü kod | ◐ Kısmen | `_numeric_pattern` kaldırıldı |
+| Yeni bulgu | ✅ Düzeltildi | `remove_duplicates`, metin sütununda NaN olan mükerrer satırlarda `TypeError` veriyordu |
+
+Açık kalanlar: Y4, Y6, O1-O4, O6-O9, D1-D2, D4-D9. Sıradaki işler: AutoML baseline (Y6), HTML/PDF rapor, zaman serisi.
+
 ## Nasıl doğrulandı
 
 Bu belgedeki bulgular yalnızca kod okumasına dayanmıyor; aşağıdakiler `.venv` içindeki Python 3.13.16 ile, proje dosyalarına yazmadan çalıştırıldı:

@@ -179,14 +179,10 @@ class ActionExecutor:
                          column: str | None = None) -> pd.DataFrame:
         result = frame.copy()
         columns = [column] if column else list(result.select_dtypes(include=[np.number]).columns)
-        identifier_tokens = (
-            "id", "kimlik", "posta", "zip", "code", "kod", "müşteri adı",
-            "musteri adi", "name", "isim", "ad soyad", "uuid",
-        )
         for current_column in columns:
             if current_column not in result.columns:
                 continue
-            if any(token in str(current_column).lower() for token in identifier_tokens):
+            if is_identifier_name(current_column):
                 continue
             series = result[current_column]
             q1, q3 = series.quantile([0.25, 0.75])
