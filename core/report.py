@@ -22,6 +22,11 @@ from core.autopilot import AutopilotResult
 from core.health import LOG_METHOD, OutlierFinding
 from core.formatting import decimal_tr, integer_tr, localize_figure
 from core.timeseries import TimeSeriesSummary, format_period
+from core.drift import DriftReport
+from core.executor import RejectedAction
+from core.explain import PDP_NOTE, ModelExplanation, PartialDependence
+from core.planner import PlanOrigin
+from core.relations import JoinLog
 
 _PROBLEM_TYPES = {"Classification": "Sınıflandırma", "Regression": "Regresyon"}
 
@@ -65,6 +70,15 @@ class ReportModelSummary(BaseModel):
     leaderboard: list[dict[str, Any]] = Field(default_factory=list)
     leakage_warnings: list[str] = Field(default_factory=list)
     top_features: list[ReportFeature] = Field(default_factory=list)
+    split_method: str = ""
+    train_rows: int = 0
+    test_rows: int = 0
+    rows_available: int = 0
+    cv_folds: int = 0
+    cv_score: float | None = None
+    cv_std: float | None = None
+    excluded_columns: list[str] = Field(default_factory=list)
+    acknowledged_columns: list[str] = Field(default_factory=list)
 
 
 class ExecutiveReport(BaseModel):
@@ -89,6 +103,11 @@ class ExecutiveReport(BaseModel):
     model_message: str = ""
     timeseries: TimeSeriesSummary | None = None
     timeseries_message: str = ""
+    drift: DriftReport | None = None
+    pdp: list[PartialDependence] = Field(default_factory=list)
+    join_logs: list[JoinLog] = Field(default_factory=list)
+    plan_origin: PlanOrigin | None = None
+    rejected_actions: list[RejectedAction] = Field(default_factory=list)
 
 
 # --- Türkçe biçimlendirme --------------------------------------------------------------------
@@ -140,8 +159,19 @@ def _model_summary(result: AutopilotResult) -> ReportModelSummary | None:
         beats_baseline=automl.beats_baseline,
         verdict=automl.verdict,
         leakage_warnings=list(automl.leakage_warnings),
+        split_method=automl.split_method,
+        train_rows=automl.train_rows,
+        test_rows=automl.test_rows,
+        rows_available=int(result.cleaned_frame[result.suggested_target].notna().sum())
+        if result.suggested_target in result.cleaned_frame.columns else 0,
+        cv_folds=automl.cv_folds,
+        cv_score=None if automl.cv_score != automl.cv_score else float(automl.cv_score),
+        cv_std=None if automl.cv_std != automl.cv_std else float(automl.cv_std),
+        excluded_columns=list(automl.excluded_columns),
+        acknowledged_columns=list(automl.acknowledged_columns),
         leaderboard=[
-            {key: (float(value) if isinstance(value, float) else value) for key, value in row.items()}
+            {key: (None if isinstance(value, float) and value != value else
+                   float(value) if isinstance(value, float) else value) for key, value in row.items()}
             for row in automl.leaderboard.round(4).to_dict("records")
         ],
         top_features=[
@@ -152,7 +182,13 @@ def _model_summary(result: AutopilotResult) -> ReportModelSummary | None:
 
 
 def build_report(
-    result: AutopilotResult, dataset_name: str, generated_at: datetime | None = None
+    result: AutopilotResult,
+    dataset_name: str,
+    generated_at: datetime | None = None,
+    *,
+    drift: DriftReport | None = None,
+    explanation: ModelExplanation | None = None,
+    join_logs: list[JoinLog] | None = None,
 ) -> ExecutiveReport:
     """Otopilot sonucundan JSON'a çevrilebilir, sunuma hazır yönetici raporu üretir."""
     before, after = result.before_report, result.after_report
@@ -184,6 +220,11 @@ def build_report(
     timeseries = result.timeseries.summary if result.timeseries is not None else None
     if timeseries is not None:
         headline.append(timeseries.trend_text)
+    if drift is not None:
+        headline.append(
+            f"Dönem karşılaştırması ({drift.reference_label} → {drift.current_label}): "
+            f"{drift.counts['kırmızı']} kırmızı, {drift.counts['sarı']} sarı, {drift.counts['yeşil']} yeşil sütun."
+        )
     headline.append(model.verdict if model else (result.automl_message or "Tahmin modeli eğitilmedi."))
     if model and model.leakage_warnings:
         headline.append(
@@ -237,6 +278,13 @@ def build_report(
             f"{timeseries.value_label} serisinde olağan dışı dönemler: {details}. "
             "Kampanya, tatil veya veri hatası olup olmadığı doğrulanmalı."
         )
+    if drift is not None and drift.counts.get("kırmızı"):
+        worst = next(item for item in drift.columns if item.status == "kırmızı")
+        recommendations.append(
+            f"Dönem karşılaştırmasında ({drift.reference_label} → {drift.current_label}) "
+            f"{drift.counts['kırmızı']} sütun kırmızı; en büyük değişim “{worst.column}”: {worst.explanation} "
+            "Modeller ve raporlar bu değişimi hesaba katmalı."
+        )
     if timeseries is not None and not timeseries.beats_baseline:
         recommendations.append(
             "Zaman serisi tahmini naif yöntemi anlamlı biçimde geçemedi; planlamada yalnızca kaba yön göstergesi "
@@ -282,7 +330,40 @@ def build_report(
         model_message=result.automl_message,
         timeseries=timeseries,
         timeseries_message=result.timeseries_message,
+        drift=drift,
+        pdp=list(explanation.curves) if explanation is not None else [],
+        join_logs=list(join_logs or []),
+        plan_origin=result.plan_origin,
+        rejected_actions=list(result.rejected_actions),
     )
+
+
+def _evaluation_text(model: ReportModelSummary) -> str:
+    """Modelin nasıl değerlendirildiği: bölme, satır sayıları, çapraz doğrulama, örneklem ve tahmin anı."""
+    if not model.train_rows:
+        return ""
+    parts = [f"Değerlendirme: {model.split_method}",
+             f"eğitim {_int(model.train_rows)} / test {_int(model.test_rows)} satır"]
+    if model.cv_folds and model.cv_score is not None:
+        parts.append(
+            f"model {model.cv_folds} katlı çapraz doğrulamayla seçildi (CV {_dec(model.cv_score, 3)} ± "
+            f"{_dec(model.cv_std or 0.0, 3)})"
+        )
+    text = " · ".join(parts) + "."
+    used = model.train_rows + model.test_rows
+    if model.rows_available > used:
+        text += f" Model, {_int(model.rows_available)} satırın {_int(used)} satırlık rastgele örneklemiyle eğitildi."
+    if model.excluded_columns:
+        text += f" Tahmin anında bilinmediği için çıkarılan sütunlar: {', '.join(model.excluded_columns)}."
+    if model.acknowledged_columns:
+        text += f" Tahmin anında bilindiği onaylanan sütunlar: {', '.join(model.acknowledged_columns)}."
+    return text
+
+
+def _plan_text(report: ExecutiveReport) -> str:
+    if report.plan_origin is None:
+        return ""
+    return f"Temizlik planı: {report.plan_origin.source} — {report.plan_origin.reason}"
 
 
 def _timeseries_facts(series: TimeSeriesSummary) -> list[tuple[str, str]]:
@@ -331,6 +412,22 @@ def _tables(report: ExecutiveReport) -> dict[str, tuple[list[str], list[list[str
             ["Dönem", "Gözlenen", "Beklenen", "Sapma (z)", "Yön"],
             [[item.label, _num(item.observed), _num(round(item.expected, 1)), _dec(item.z), item.direction]
              for item in report.timeseries.anomalies],
+        )
+    if report.drift and report.drift.columns:
+        changed = [item for item in report.drift.columns if item.status != "yeşil"] or report.drift.columns[:5]
+        tables["drift"] = (
+            ["Durum", "Sütun", "Tür", "PSI", "Açıklama"],
+            [[item.status, item.column, item.kind, _dec(item.psi, 3), item.explanation] for item in changed[:15]],
+        )
+    if report.join_logs:
+        tables["joins"] = (
+            ["Tablo", "Tür", "Anahtar", "Satır", "Eşleşme"],
+            [[log.table, log.mode, log.key, _int(log.rows_after), _pct(log.match_rate)] for log in report.join_logs],
+        )
+    if report.rejected_actions:
+        tables["rejected"] = (
+            ["Sütun", "Öneri", "Neden uygulanmadı"],
+            [[item.column, item.action, item.rejection] for item in report.rejected_actions],
         )
     if report.model and report.model.leaderboard:
         headers = list(report.model.leaderboard[0])
@@ -393,6 +490,7 @@ def render_html(
     model_figure: Any | None = None,
     embed_plotly: bool = True,
     timeseries_figures: Sequence[Any] = (),
+    pdp_figures: Sequence[Any] = (),
 ) -> str:
     """Kendi kendine yeten tek dosyalık HTML raporu.
 
@@ -449,6 +547,18 @@ def render_html(
     elif report.timeseries_message:
         parts.append(f"<section><h2>Zaman Serisi</h2><p>{escape(report.timeseries_message)}</p></section>")
 
+    if report.drift:
+        drift = report.drift
+        parts.append("<section><h2>Dönem Karşılaştırması</h2>")
+        parts.append(f"<p>{escape(drift.summary)}</p>")
+        parts.extend(
+            f'<p class="verdict">Şema: “{escape(item.column)}” {escape(item.change)} ({escape(item.detail)})</p>'
+            for item in drift.schema_changes
+        )
+        if "drift" in tables:
+            parts.append(_html_table(*tables["drift"]))
+        parts.append(f'<p class="note" style="margin-top:8px">{escape(drift.method_note)}</p></section>')
+
     if report.charts and figures:
         parts.append('<section><h2>Öne Çıkan Grafikler</h2><div class="charts">')
         for chart, figure in zip(report.charts, figures):
@@ -477,6 +587,8 @@ def render_html(
             parts.append(_html_table(*tables["leaderboard"]))
         if model_figure is not None:
             parts.append(f'<div class="chart" style="margin-top:16px">{plot(model_figure)}</div>')
+        if _evaluation_text(model):
+            parts.append(f'<p class="note">{escape(_evaluation_text(model))}</p>')
         parts.append(
             '<p class="note">Eksik doldurma ve ölçekleme yalnızca eğitim verisinden öğrenildi; '
             "skorlar modelin hiç görmediği test bölmesinde ölçüldü.</p>"
@@ -484,6 +596,15 @@ def render_html(
     else:
         parts.append(f"<p>{escape(report.model_message or 'Tahmin modeli eğitilmedi.')}</p>")
     parts.append("</section>")
+
+    if report.pdp:
+        parts.append(f'<section><h2>Model Neden Böyle Tahmin Ediyor?</h2><p class="note">{escape(PDP_NOTE)}</p>')
+        for index, curve in enumerate(report.pdp):
+            if index < len(pdp_figures):
+                parts.append(f'<div class="chart" style="margin-top:16px">{plot(pdp_figures[index])}</div>')
+            css = "verdict" if curve.interpretation.startswith("Uyarı") else "note"
+            parts.append(f'<p class="{css}" style="margin-top:8px">{escape(curve.interpretation)}</p>')
+        parts.append("</section>")
 
     parts.append("<section><h2>Veri Kalitesi</h2>")
     parts.append(_html_list(report.issues) if report.issues else "<p>Başlangıçta belirgin bir kalite sorunu tespit edilmedi.</p>")
@@ -495,8 +616,22 @@ def render_html(
             parts.append(f'<p class="note" style="margin-top:8px">{escape(_LOG_NOTE)}</p>')
     parts.append("</section>")
 
-    if "actions" in tables:
-        parts.append(f"<section><h2>Uygulanan İşlemler</h2>{_html_table(*tables['actions'])}</section>")
+    if "joins" in tables:
+        parts.append(
+            "<section><h2>Veri Birleştirme</h2>" + _html_table(*tables["joins"])
+            + '<p class="note" style="margin-top:8px">Birleştirme satır sayısını değiştirmez; eşleşmeyen '
+            "satırlarda eklenen sütunlar boş kalır.</p></section>"
+        )
+    if "actions" in tables or report.plan_origin or "rejected" in tables:
+        parts.append("<section><h2>Uygulanan İşlemler</h2>")
+        if _plan_text(report):
+            parts.append(f'<p class="note">{escape(_plan_text(report))}</p>')
+        if "actions" in tables:
+            parts.append(_html_table(*tables["actions"]))
+        if "rejected" in tables:
+            parts.append('<h3 style="margin-top:20px">Uygulanmayan plan önerileri (veri koruma)</h3>'
+                         + _html_table(*tables["rejected"]))
+        parts.append("</section>")
 
     parts.append(
         "<footer>Bu rapor Data Autopilot AI tarafından deterministik kurallarla üretildi. "
@@ -576,7 +711,8 @@ def _pdf_fonts() -> tuple[str, str, Callable[[str], str]]:
 
 
 def render_pdf(
-    report: ExecutiveReport, figures: Sequence[Any] = (), timeseries_figures: Sequence[Any] = ()
+    report: ExecutiveReport, figures: Sequence[Any] = (), timeseries_figures: Sequence[Any] = (),
+    pdp_figures: Sequence[Any] = (),
 ) -> bytes:
     """A4 PDF; rapor modelinden ayrı alınan grafikler en fazla altı statik görsele çevrilir."""
     from core.chart_export import can_export, chart_png
@@ -672,6 +808,14 @@ def render_pdf(
     elif report.timeseries_message:
         story += [para("Zaman Serisi", h2), para(report.timeseries_message)]
 
+    if report.drift:
+        drift = report.drift
+        story += [para("Dönem Karşılaştırması", h2), para(drift.summary)]
+        story += bullets([f"Şema: “{item.column}” {item.change} ({item.detail})" for item in drift.schema_changes])
+        if "drift" in tables:
+            story.append(table(*tables["drift"], widths=[0.10, 0.20, 0.11, 0.09, 0.50]))
+        story.append(para(drift.method_note, note))
+
     story.append(para("Tahmin Modeli", h2))
     if report.model:
         model = report.model
@@ -710,12 +854,29 @@ def render_pdf(
             chart.bars[0].strokeColor = None
             drawing.add(chart)
             story += [para("Özellik önemi (test verisinde permütasyon etkisi)", h3), drawing]
+        if _evaluation_text(model):
+            story.append(para(_evaluation_text(model), note))
         story.append(para(
             "Eksik doldurma ve ölçekleme yalnızca eğitim verisinden öğrenildi; skorlar modelin hiç görmediği "
             "test bölmesinde ölçüldü.", note,
         ))
     else:
         story.append(para(report.model_message or "Tahmin modeli eğitilmedi."))
+
+    pdp_images = 0
+    if report.pdp:
+        pdp_budget = max(0, 6 - int(bool(report.model and report.model.top_features)) - timeseries_images)
+        story += [para("Model Neden Böyle Tahmin Ediyor?", h2), para(PDP_NOTE, note)]
+        for index, curve in enumerate(report.pdp):
+            block: list[Any] = []
+            if index < len(pdp_figures) and pdp_images < pdp_budget and can_export(pdp_figures[index]):
+                png = chart_png(pdp_figures[index])
+                fallbacks += int(getattr(png, "fallback", False))
+                image_width = content_width * _PDF_CHART_WIDTH
+                block.append(Image(BytesIO(png), width=image_width, height=image_width * 0.56))
+                pdp_images += 1
+            block.append(para(curve.interpretation))
+            story.append(KeepTogether(block))
 
     story.append(para("Veri Kalitesi", h2))
     story += bullets(report.issues) if report.issues else [para("Başlangıçta belirgin bir kalite sorunu tespit edilmedi.")]
@@ -733,7 +894,7 @@ def render_pdf(
         # zorunlu sayfa sonu yoktur. Bölüm başlığı ilk grafikle aynı sayfada kalır.
         image_width = content_width * _PDF_CHART_WIDTH
         heading: list[Any] = [para("Öne Çıkan Grafikler", h2)]
-        budget = 6 - int(bool(report.model and report.model.top_features)) - timeseries_images
+        budget = 6 - int(bool(report.model and report.model.top_features)) - timeseries_images - pdp_images
         exported = 0
         shown: set[int] = set()  # PDF'te görseli basılan grafiklerin sırası
         for position, (chart_summary, figure) in enumerate(zip(report.charts, figures)):
@@ -768,8 +929,21 @@ def render_pdf(
             f"Not: {fallbacks} grafik birincil çizici (Kaleido) kullanılamadığı için yedek çizici (Matplotlib) "
             "ile üretildi; görünümü HTML rapordaki etkileşimli grafikten farklı olabilir.", note,
         ))
-    if "actions" in tables:
-        story += [para("Uygulanan İşlemler", h2), table(*tables["actions"], widths=[0.22, 0.22, 0.44, 0.12])]
+    if "joins" in tables:
+        story += [
+            para("Veri Birleştirme", h2),
+            table(*tables["joins"], widths=[0.24, 0.12, 0.38, 0.13, 0.13]),
+            para("Birleştirme satır sayısını değiştirmez; eşleşmeyen satırlarda eklenen sütunlar boş kalır.", note),
+        ]
+    if "actions" in tables or report.plan_origin or "rejected" in tables:
+        story.append(para("Uygulanan İşlemler", h2))
+        if _plan_text(report):
+            story.append(para(_plan_text(report), note))
+        if "actions" in tables:
+            story.append(table(*tables["actions"], widths=[0.22, 0.22, 0.44, 0.12]))
+        if "rejected" in tables:
+            story += [para("Uygulanmayan plan önerileri (veri koruma)", h3),
+                      table(*tables["rejected"], widths=[0.22, 0.18, 0.60])]
     story += [
         Spacer(1, 14),
         para("Bu rapor deterministik kurallarla üretildi. Ham satırlar ve kişisel veriler rapora dahil edilmez.", note),

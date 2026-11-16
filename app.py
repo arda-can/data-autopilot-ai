@@ -468,6 +468,7 @@ selected_target = st.selectbox(
 automl = result.automl_result
 automl_error = ""
 automl_settings: tuple = (None, (), ())
+report_explanation = None
 if selected_target != "-- Hedef seçin --":
     with st.expander("Değerlendirme ve tahmin anı ayarları"):
         st.caption(
@@ -548,6 +549,7 @@ if automl is not None:
         if isinstance(explanation, str):
             st.info(explanation)
         else:
+            report_explanation = explanation
             st.caption(PDP_NOTE)
             for curve, curve_figure in zip(explanation.curves, explanation.figures):
                 st.plotly_chart(curve_figure, width="stretch")
@@ -597,12 +599,24 @@ st.caption(
     "Özet, öneriler, grafikler ve model sonucu tek dosyada. "
     "Ham satırlar ve audit log örnekleri rapora girmez."
 )
-report_key = (st.session_state.data_signature, selected_target, ts_request)
+report_key = (st.session_state.data_signature, selected_target, ts_request, automl_settings, str(drift_request))
 if st.button("Raporu Hazırla", key="report_button"):
     with st.spinner("Rapor hazırlanıyor..."):
         ts_figures = [] if timeseries is None else [
             figure for figure in (timeseries.forecast_figure, timeseries.seasonal_figure) if figure is not None
         ]
+        stored_drift = st.session_state.get("drift_result")
+        report_drift = (
+            stored_drift[2].report
+            if stored_drift and stored_drift[0] == st.session_state.data_signature
+            and stored_drift[1] == drift_request and not isinstance(stored_drift[2], str)
+            else None
+        )
+        report_joins = (
+            st.session_state.get("join_logs")
+            if str(st.session_state.data_signature or "").startswith("join:") else None
+        )
+        pdp_figures = list(report_explanation.figures) if report_explanation is not None else []
         report = build_report(
             replace(
                 result,
@@ -613,14 +627,20 @@ if st.button("Raporu Hazırla", key="report_button"):
                 timeseries_message=timeseries_error,
             ),
             st.session_state.data_name,
+            drift=report_drift,
+            explanation=report_explanation,
+            join_logs=report_joins,
         )
         st.session_state.report_files = {
             "key": report_key,
             "html": render_html(
                 report, [chart.figure for chart in result.charts], automl.figure if automl is not None else None,
-                timeseries_figures=ts_figures,
+                timeseries_figures=ts_figures, pdp_figures=pdp_figures,
             ).encode("utf-8"),
-            "pdf": render_pdf(report, [chart.figure for chart in result.charts], timeseries_figures=ts_figures),
+            "pdf": render_pdf(
+                report, [chart.figure for chart in result.charts], timeseries_figures=ts_figures,
+                pdp_figures=pdp_figures,
+            ),
         }
 report_files = st.session_state.get("report_files")
 if report_files and report_files["key"] == report_key:
