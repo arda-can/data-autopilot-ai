@@ -19,8 +19,9 @@ from core.ingestion import (
     read_local_csv,
     read_tabular_file,
 )
-from core.formatting import decimal_tr, display_frame
+from core.formatting import decimal_tr, display_frame, integer_tr
 from core.report import build_report, render_html, render_pdf
+from core.timeseries import TimeSeriesEngine, date_columns, value_columns
 
 
 def _model_dict(value: BaseModel) -> dict:
@@ -158,6 +159,68 @@ if result.charts:
                 st.write(f"**Bulgu:** {chart.insight}")
 else:
     st.info("Bu veri yapısı için güvenilir ve anlamlı otomatik grafik üretilemedi.")
+
+timeseries = result.timeseries
+timeseries_error = result.timeseries_message
+ts_dates = date_columns(cleaned)
+if ts_dates:
+    st.header("📈 Zaman Serisi Otopilotu")
+    default_date = timeseries.summary.date_column if timeseries is not None else ts_dates[0]
+    metric_options = {"Kayıt sayısı": None, **{f"{column} toplamı": column for column in value_columns(cleaned)}}
+    frequency_options = {"Otomatik": "auto", "Günlük": "D", "Haftalık": "W", "Aylık": "M"}
+    date_column_ui, metric_ui, frequency_ui = st.columns(3)
+    ts_date = date_column_ui.selectbox("Tarih sütunu", ts_dates, index=ts_dates.index(default_date), key="ts_date")
+    ts_metric = metric_ui.selectbox("Ölçü", list(metric_options), key="ts_metric")
+    ts_frequency = frequency_ui.selectbox("Frekans", list(frequency_options), key="ts_frequency")
+    ts_request = (ts_date, metric_options[ts_metric], frequency_options[ts_frequency])
+    if ts_request != (default_date, None, "auto"):
+        # Kullanıcının seçimi ayrı hesaplanır ve önbelleğe alınır; her yeniden çizimde tekrarlanmaz.
+        ts_cache = st.session_state.setdefault("timeseries_cache", {})
+        ts_key = (st.session_state.data_signature, *ts_request)
+        if ts_key not in ts_cache:
+            try:
+                ts_cache[ts_key] = TimeSeriesEngine().analyze(
+                    cleaned, date_column=ts_request[0], value_column=ts_request[1], frequency=ts_request[2]
+                )
+            except ValueError as exc:
+                ts_cache[ts_key] = f"Zaman serisi analizi yapılamadı: {exc}"
+        cached_ts = ts_cache[ts_key]
+        timeseries, timeseries_error = (None, cached_ts) if isinstance(cached_ts, str) else (cached_ts, "")
+    if timeseries is None:
+        st.warning(timeseries_error or "Zaman serisi analizi yapılamadı.")
+    else:
+        ts_summary = timeseries.summary
+        ts_metrics = st.columns(4)
+        ts_metrics[0].metric("Frekans", ts_summary.frequency_label.capitalize())
+        ts_metrics[1].metric("Dönem", integer_tr(ts_summary.periods))
+        ts_metrics[2].metric(
+            "Seviye Değişimi",
+            "—" if ts_summary.level_change is None else f"%{decimal_tr(ts_summary.level_change * 100)}",
+        )
+        ts_metrics[3].metric(
+            "Mevsimsellik Gücü",
+            "—" if ts_summary.seasonality_strength is None else decimal_tr(ts_summary.seasonality_strength, 2),
+        )
+        st.write(ts_summary.trend_text)
+        st.write(ts_summary.seasonality_text)
+        (st.success if ts_summary.beats_baseline else st.warning)(ts_summary.verdict)
+        st.plotly_chart(timeseries.forecast_figure, width="stretch")
+        st.caption(f"{ts_summary.forecast_text} Model: {ts_summary.model_name}.")
+        if timeseries.seasonal_figure is not None:
+            st.plotly_chart(timeseries.seasonal_figure, width="stretch")
+        if ts_summary.anomalies:
+            st.subheader("Olağan dışı dönemler")
+            st.dataframe(
+                display_frame(pd.DataFrame([
+                    {"Dönem": item.label, "Gözlenen": item.observed, "Beklenen": item.expected,
+                     "Sapma (z)": item.z, "Yön": item.direction}
+                    for item in ts_summary.anomalies
+                ])),
+                width="stretch",
+                hide_index=True,
+            )
+        for note in ts_summary.notes:
+            st.caption(f"Not: {note}")
 
 st.header("🤖 Otonom Makine Öğrenmesi (AutoML) Sonucu")
 target_options = [str(column) for column in cleaned.columns]

@@ -20,6 +20,7 @@ from core.formatting import decimal_tr, localize_figure
 from core.health import DataHealthAnalyzer, HealthReport, OutlierFinding
 from core.metadata import DatasetMetadataCard, MetadataGenerator
 from core.planner import STATISTICAL_ACTIONS, GeminiPlanner
+from core.timeseries import TimeSeriesEngine, TimeSeriesResult, date_columns
 
 
 @dataclass
@@ -44,6 +45,8 @@ class AutopilotResult:
     automl_result: AutoMLResult | None = None
     automl_message: str = ""
     outliers: list[OutlierFinding] = field(default_factory=list)
+    timeseries: TimeSeriesResult | None = None
+    timeseries_message: str = ""
 
 
 class AutopilotEngine:
@@ -78,7 +81,15 @@ class AutopilotEngine:
 
         after_report = self.analyzer.analyze(cleaned)
         outliers = self.analyzer.find_outliers(cleaned)
-        charts, insights = self._select_charts(cleaned)
+        timeseries: TimeSeriesResult | None = None
+        timeseries_message = ""
+        if date_columns(cleaned):
+            try:
+                timeseries = TimeSeriesEngine().analyze(cleaned)
+            except ValueError as exc:
+                timeseries_message = f"Zaman serisi analizi yapılamadı: {exc}"
+        # Zaman serisi bölümü varsa ham aylık alan grafiği gereksiz ve yanıltıcı (kenar dönemleri içerir).
+        charts, insights = self._select_charts(cleaned, include_time_chart=timeseries is None)
         target = self._suggest_target(cleaned)
         automl_result: AutoMLResult | None = None
         automl_message = ""
@@ -108,9 +119,13 @@ class AutopilotEngine:
             automl_result=automl_result,
             automl_message=automl_message,
             outliers=outliers,
+            timeseries=timeseries,
+            timeseries_message=timeseries_message,
         )
 
-    def _select_charts(self, frame: pd.DataFrame) -> tuple[list[ChartInsight], list[str]]:
+    def _select_charts(
+        self, frame: pd.DataFrame, include_time_chart: bool = True
+    ) -> tuple[list[ChartInsight], list[str]]:
         numeric = [
             str(column) for column in frame.select_dtypes(include="number").columns
             if not self._is_identifier(frame, str(column))
@@ -243,7 +258,7 @@ class AutopilotEngine:
                                          color_continuous_scale=palette),
                 sample_size=len(parallel) if parallel_sampled else None)
 
-        if dates:
+        if dates and include_time_chart:
             date_column = dates[0]
             time_frame = frame[[date_column]].dropna().copy()
             time_frame["Ay"] = time_frame[date_column].dt.to_period("M").astype(str)

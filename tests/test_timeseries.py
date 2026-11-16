@@ -182,3 +182,27 @@ def test_format_period() -> None:
     assert format_period("2017-11-24", "D") == "24.11.2017"
     assert format_period("2017-11-20", "W") == "20.11.2017 haftası"
     assert format_period("2017-11-01", "M") == "Kasım 2017"
+
+
+def test_autopilot_runs_timeseries_and_drops_raw_area_chart(orders_result) -> None:
+    assert orders_result.timeseries is not None and orders_result.timeseries_message == ""
+    assert orders_result.timeseries.summary.date_column == "order_purchase_timestamp"
+    assert "Zaman Serisi Alan Grafiği" not in [chart.title for chart in orders_result.charts]
+
+
+def test_autopilot_without_dates_has_no_timeseries(dirty_result) -> None:
+    assert dirty_result.timeseries is None and dirty_result.timeseries_message == ""
+
+
+def test_autopilot_reports_why_timeseries_failed() -> None:
+    from core.autopilot import AutopilotEngine
+
+    frame = pd.DataFrame({
+        "tarih": pd.date_range("2024-01-01", periods=40, freq="D").repeat(3)[:100],
+        "değer": np.arange(100, dtype=float),
+        "grup": ["a", "b"] * 50,
+    })
+    frame.loc[frame.index[20:], "tarih"] = pd.Timestamp("2024-01-08")
+    result = AutopilotEngine().run_full_autopilot(frame)
+    assert result.timeseries is None
+    assert result.timeseries_message.startswith("Zaman serisi analizi yapılamadı: ")
