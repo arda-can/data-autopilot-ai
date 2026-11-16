@@ -23,10 +23,21 @@ from core.formatting import decimal_tr, display_frame, integer_tr
 from core.report import build_report, render_html, render_pdf
 from core.timeseries import TimeSeriesEngine, date_columns, value_columns
 from core.drift import DriftEngine, prepare_for_comparison, split_by_date, split_by_years
+from core.relations import (
+    JoinPlan, RelationFinder, apply_plan, default_base, load_tables, prune_plan, relation_figure, suggest_plan,
+)
 
 
 def _model_dict(value: BaseModel) -> dict:
     return value.model_dump()
+
+
+@st.cache_resource(show_spinner="Tablolar okunuyor ve ilişkiler aranıyor...")
+def _discover_tables(signature: tuple[tuple[str, int], ...]) -> tuple:
+    """`data/` klasöründeki tabloları bir kez okur; dosyalar değişince imza değişir ve yeniden okunur."""
+    tables = load_tables([Path(path) for path, _ in signature])
+    finder = RelationFinder()
+    return tables, finder.describe(tables), finder.discover(tables)
 
 
 st.set_page_config(page_title="Data Autopilot AI", page_icon="🚀", layout="wide")
@@ -49,10 +60,15 @@ with st.sidebar:
         type="password",
         help="Boş bırakılırsa KVKK maskeli metadata üzerinden güvenli yerel fallback kullanılır.",
     )
+    work_mode = st.radio("Çalışma modu", ["Tek tablo", "Çoklu tablo (data/ klasörü)"], key="work_mode")
     files = list_local_csv_files()
-    selected = st.selectbox("Yerel CSV seçin", ["-- Seçin --", *[p.name for p in files]])
-    uploaded = st.file_uploader("CSV veya Excel yükleyin", type=["csv", "xlsx", "xls"])
-    if st.button("Örnek Kirli Türkçe Veri Üret ve Yükle", width="stretch"):
+    selected, uploaded = "-- Seçin --", None
+    if work_mode == "Tek tablo":
+        selected = st.selectbox("Yerel CSV seçin", ["-- Seçin --", *[p.name for p in files]])
+        uploaded = st.file_uploader("CSV veya Excel yükleyin", type=["csv", "xlsx", "xls"])
+    else:
+        st.caption("Tablolar arası ilişkiler ana ekranda keşfedilir; onayladığınız plan tek tabloya birleştirilir.")
+    if work_mode == "Tek tablo" and st.button("Örnek Kirli Türkçe Veri Üret ve Yükle", width="stretch"):
         path = generate_sample_dirty_data()
         st.session_state.dataframe = read_local_csv(path)
         st.session_state.data_signature = f"sample:{path.stat().st_mtime_ns}"
@@ -75,6 +91,91 @@ elif selected != "-- Seçin --":
         st.session_state.data_signature = source_signature
         st.session_state.data_name = path.name
         st.session_state.autopilot_result = None
+
+if work_mode != "Tek tablo":
+    joined_active = str(st.session_state.data_signature or "").startswith("join:")
+    with st.expander("🔗 Çoklu Tablo Keşfi ve Birleştirme", expanded=not joined_active):
+        if len(files) < 2:
+            st.info("Çoklu tablo için data/ klasöründe en az iki CSV gerekir.")
+        else:
+            tables, table_infos, relations = _discover_tables(
+                tuple((str(path), path.stat().st_mtime_ns) for path in files)
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {"Tablo": info.name, "Satır": info.rows, "Sütun": info.columns,
+                     "Benzersiz anahtarlar": ", ".join(info.unique_keys) or "—"}
+                    for info in table_infos
+                ]),
+                width="stretch", hide_index=True,
+            )
+            if relations:
+                st.plotly_chart(relation_figure(table_infos, relations), width="stretch")
+                st.dataframe(
+                    display_frame(pd.DataFrame([
+                        {"Tür": item.kind, "Çok taraf": f"{item.left_table}.{item.left_column}",
+                         "Bir taraf": f"{item.right_table}.{item.right_column}",
+                         "Kapsama": item.containment, "Ortak değer": item.shared_values,
+                         "Öneri": "evet" if item.suggested else "hayır", "Not": item.note}
+                        for item in relations
+                    ])),
+                    width="stretch", hide_index=True,
+                )
+                table_names = list(tables)
+                join_base = st.selectbox(
+                    "Taban tablo (birleşik verinin satır düzeyi bu tablonun düzeyi olur)", table_names,
+                    index=table_names.index(default_base(relations, table_names)), key="join_base",
+                )
+                join_plan = suggest_plan(join_base, relations, tables)
+                if not join_plan.steps:
+                    st.info("Bu tablodan güvenli biçimde birleştirilebilecek bir tablo bulunamadı.")
+                else:
+                    st.write("**Önerilen birleştirme planı** — onaylamadığınız adımların işaretini kaldırın:")
+                    st.caption(
+                        "Eşleştir: karşı tabloda anahtar benzersiz, satır sayısı değişmez. "
+                        "Topla: karşı tabloda anahtar başına birden çok satır var; önce anahtar başına "
+                        "sayım/ortalama/toplam alınır. Çoktan-çoğa ilişkiler satırları çoğaltacağı için önerilmez."
+                    )
+                    approved_tables = {
+                        step.table for step in join_plan.steps
+                        if st.checkbox(
+                            f"{step.table} — {step.mode}: {step.left_table}.{step.left_column} = "
+                            f"{step.table}.{step.right_column}",
+                            value=True, key=f"join_step_{join_base}_{step.table}",
+                        )
+                    }
+                    valid_plan, dropped_steps = prune_plan(join_plan, approved_tables)
+                    for reason in dropped_steps:
+                        st.caption(reason)
+                    if st.button("Birleştir ve analiz et", key="join_button", disabled=not valid_plan.steps):
+                        try:
+                            with st.spinner("Tablolar birleştiriliyor..."):
+                                joined = apply_plan(tables, valid_plan)
+                        except ValueError as exc:
+                            st.error(f"Birleştirme yapılamadı: {exc}")
+                        else:
+                            st.session_state.dataframe = joined.frame
+                            st.session_state.data_signature = (
+                                f"join:{join_base}:{'+'.join(step.table for step in valid_plan.steps)}"
+                            )
+                            st.session_state.data_name = f"birlesik_{join_base}.csv"
+                            st.session_state.join_logs = joined.logs
+                            st.session_state.autopilot_result = None
+                            st.rerun()
+            else:
+                st.info("Tablolar arasında ortak anahtar bulunamadı.")
+    if joined_active and st.session_state.get("join_logs"):
+        with st.expander("Birleştirme kaydı"):
+            st.dataframe(
+                display_frame(pd.DataFrame([
+                    {"Tablo": log.table, "Tür": log.mode, "Anahtar": log.key, "Satır (önce)": log.rows_before,
+                     "Satır (sonra)": log.rows_after, "Eşleşme oranı": log.match_rate, "Not": log.note}
+                    for log in st.session_state.join_logs
+                ])),
+                width="stretch", hide_index=True,
+            )
+    if not joined_active:
+        st.stop()
 
 frame = st.session_state.dataframe
 if frame is None:
