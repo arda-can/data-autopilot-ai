@@ -107,3 +107,25 @@ def test_no_leakage_check_when_model_does_not_beat_baseline() -> None:
     frame = pd.DataFrame({"a": rng.normal(size=300), "b": rng.normal(size=300), "hedef_deger": rng.normal(size=300)})
     result = AutoMLEngine().run(frame, "hedef_deger")
     assert not result.beats_baseline and result.leakage_warnings == []
+
+
+def test_date_difference_features() -> None:
+    """Gecikme (teslim − tahmini teslim) puanı belirliyorsa model bunu gün farkı özelliğinden öğrenir."""
+    rng = np.random.default_rng(5)
+    rows = 600
+    purchase = pd.Timestamp("2018-01-01") + pd.to_timedelta(rng.integers(0, 300, rows), unit="D")
+    estimated = purchase + pd.Timedelta(days=20)
+    delay = rng.integers(-10, 15, rows)
+    delivered = estimated + pd.to_timedelta(delay, unit="D")
+    frame = pd.DataFrame({
+        "satin_alma": purchase, "tahmini_teslim": estimated, "teslim": delivered,
+        "puan": np.clip(4.5 - 0.25 * np.clip(delay, 0, None) + rng.normal(0, 0.3, rows), 1, 5),
+    })
+    prepared = AutoMLEngine._prepare_features(frame.drop(columns=["puan"]))
+    assert "teslim − tahmini_teslim (gün)" in prepared.columns
+    assert prepared["teslim − tahmini_teslim (gün)"].tolist() == pytest.approx(delay.astype(float).tolist())
+    result = AutoMLEngine().run(frame, "puan")
+    assert result.beats_baseline and result.best_score > 0.7
+    assert result.feature_importance["Feature"].iloc[0] in (
+        "teslim − tahmini_teslim (gün)", "teslim − satin_alma (gün)",
+    )

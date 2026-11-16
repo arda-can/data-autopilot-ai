@@ -45,6 +45,7 @@ class AutoMLResult:
 
 # Tek bir özellik, modelin taban üzerindeki kazancının bu kadarını tek başına sağlıyorsa sızıntı şüphesi.
 LEAKAGE_SHARE = 0.90
+_MAX_DATE_COLUMNS = 5
 # Yalnızca boş/dolu bilgisi kazancın bu kadarını açıklıyorsa (sonradan doldurulan alan izi).
 LEAKAGE_MISSING_SHARE = 0.50
 _LEAKAGE_CANDIDATES = 5
@@ -184,6 +185,13 @@ class AutoMLEngine:
             for name in features:
                 if column == name or column in (f"{name}_month", f"{name}_dayofweek"):
                     return name
+            if column.endswith(" (gün)") and " − " in column:
+                # Gün farkı, iki tarihten daha çok boş olanına bağlanır: boşluk imzası oradan gelir.
+                later, earlier = column.removesuffix(" (gün)").split(" − ", 1)
+                return max(
+                    (later, earlier),
+                    key=lambda name: X_train[f"{name}_month"].isna().sum() if f"{name}_month" in X_train else -1,
+                )
             return column
 
         groups: dict[str, list[str]] = {}
@@ -321,7 +329,13 @@ class AutoMLEngine:
 
     @staticmethod
     def _prepare_features(frame: pd.DataFrame) -> pd.DataFrame:
+        """Tarihleri ay/haftanın günü ve tarih çiftleri arasındaki gün farkına çevirir.
+
+        Gün farkı satır içi bir hesaptır (iki sütunun farkı); veriden istatistik öğrenmez, bu yüzden
+        bölmeden önce yapılması sızıntı yaratmaz. Ör. teslim − tahmini teslim = gecikme (gün).
+        """
         prepared = pd.DataFrame(index=frame.index)
+        dates: dict[str, pd.Series] = {}
         for column in frame.columns:
             series = frame[column]
             name = str(column)
@@ -329,8 +343,17 @@ class AutoMLEngine:
             if parsed is not None:
                 prepared[f"{name}_month"] = parsed.dt.month
                 prepared[f"{name}_dayofweek"] = parsed.dt.dayofweek
+                dates[name] = parsed
             else:
                 prepared[name] = series
+        # En dolu en fazla beş tarih; her çift için "sonraki − önceki" (medyan zamana göre sıralı).
+        chosen = sorted(dates, key=lambda name: dates[name].isna().mean())[:_MAX_DATE_COLUMNS]
+        ordered = sorted(chosen, key=lambda name: dates[name].dropna().median())
+        for index, earlier in enumerate(ordered):
+            for later in ordered[index + 1:]:
+                prepared[f"{later} − {earlier} (gün)"] = (
+                    (dates[later] - dates[earlier]).dt.total_seconds() / 86_400
+                )
         return prepared
 
     @staticmethod
