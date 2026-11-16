@@ -378,7 +378,8 @@ class DataChatEngine:
             if item.operator not in ("==", "!=") and is_text_series(series):
                 raise ValueError(f"“{item.column}” metin sütunu; “{item.operator}” karşılaştırması yapılamaz.")
             comparisons = {
-                "==": series == value, "!=": series != value, ">": series > value,
+                # SQL'deki <> gibi: boş değer "eşit değil" koşulunu sağlamaz (pandas'ta NaN != x True olurdu).
+                "==": series == value, "!=": (series != value) & series.notna(), ">": series > value,
                 ">=": series >= value, "<": series < value, "<=": series <= value,
             }
             mask &= comparisons[item.operator].fillna(False)
@@ -510,7 +511,10 @@ class DataChatEngine:
                 py_conditions.append(f"df[{item.column!r}].isin([{', '.join(py_value(item.column, v) for v in item.values)}])")
                 sql_conditions.append(f"{sql_name(item.column)} IN ({', '.join(sql_value(item.column, v) for v in item.values)})")
             else:
-                py_conditions.append(f"(df[{item.column!r}] {item.operator} {py_value(item.column, item.value)})")
+                condition = f"(df[{item.column!r}] {item.operator} {py_value(item.column, item.value)})"
+                if item.operator == "!=":
+                    condition = f"({condition[1:-1]} & df[{item.column!r}].notna())"
+                py_conditions.append(condition)
                 sql_operator = "=" if item.operator == "==" else ("<>" if item.operator == "!=" else item.operator)
                 sql_conditions.append(f"{sql_name(item.column)} {sql_operator} {sql_value(item.column, item.value)}")
         lines = ["df = veri"]
