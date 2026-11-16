@@ -10,7 +10,7 @@ Windows, sanal ortam `.venv` içinde:
 - Tek modül: `.venv\Scripts\python.exe -m pytest tests/test_executor.py`
 - Uygulama: `.venv\Scripts\python.exe -m streamlit run app.py`
 
-Python 3.13 kullanılıyor (pandas 3 en az 3.11 ister; `.cursorrules`'taki "3.10+" artık geçerli değil). Sürümler `requirements.txt` içinde sabit, geliştirme araçları `requirements-dev.txt` içinde. Yeni bağımlılık eklemeden önce kullanıcıya sor, sonra sürümüyle birlikte ekle. `statsmodels` ve `python-docx` için ön onay var (henüz kurulu değil); `reportlab`, `kaleido` ve `matplotlib` kurulu ve sabit. `prophet` kullanılmayacak, `shap` yerine önce PDP.
+Python 3.13 kullanılıyor (pandas 3 en az 3.11 ister; `.cursorrules`'taki "3.10+" artık geçerli değil). Sürümler `requirements.txt` içinde sabit, geliştirme araçları `requirements-dev.txt` içinde. Yeni bağımlılık eklemeden önce kullanıcıya sor, sonra sürümüyle birlikte ekle. `python-docx` için ön onay var (henüz kurulu değil); `reportlab`, `kaleido`, `matplotlib` ve `statsmodels` kurulu ve sabit. `prophet` kullanılmayacak, `shap` yerine önce PDP.
 
 Makinede Smart App Control açık: derlenmiş bir modül (`.pyd`) ilk yüklemede "Uygulama Denetimi ilkesi bu dosyayı engelledi" hatası verebilir. Aynı komutu bir kez daha çalıştırmak genellikle yeter.
 
@@ -49,10 +49,19 @@ Bunların her biri gerçek bir hatadan doğdu (ayrıntı: `ANALIZ.md`).
 
 ## Yol haritası
 
-`ANALIZ.md` bölüm 5. Tamamlananlar: kritik düzeltmeler, AutoML taban modeli, HTML/PDF yönetici raporu (`core/report.py`). Sıradaki iş: zaman serisi otopilotu (`statsmodels`).
+`ANALIZ.md` bölüm 5. Tamamlananlar: kritik düzeltmeler, AutoML taban modeli, HTML/PDF yönetici raporu (`core/report.py`), zaman serisi otopilotu (`core/timeseries.py`). Sıradaki iş: dönem karşılaştırması (drift).
 
 Rapor kuralları: `ExecutiveReport` JSON'a çevrilebilir kalmalı; ham satır ve audit örnekleri rapora girmez; veriden gelen her metin HTML'de `html.escape`, PDF'te `xml_escape` ile kaçırılır.
 
 PDF grafik akışı (`core/chart_export.py`): `render_pdf(report, figures)` en fazla altı görsel basar (özellik önemi çubuğu dahil). Her Plotly figürü açık temalı bir kopyaya çevrilir ve önce Kaleido ile PNG'ye aktarılır (Kaleido 1.x Chrome ister). Kaleido başarısız olursa hata yutulmaz: `core.chart_export` logger'ına uyarı düşer, Matplotlib (GUI'siz Agg) yedeği çizer ve PDF'e "yedek çizici" notu eklenir. 3B ve paralel koordinat grafikleri PDF'e aktarılmaz; yalnızca HTML'de bulunur. Yeni grafik tipi eklenirse `_matplotlib_png` içinde karşılığı yazılmalı, yoksa yedek yol `ValueError` verir.
 
 Sayı ve grafik sunumu `core/formatting.py` üzerinden Türkçe biçimlenir (`decimal_tr`, `integer_tr`, `display_frame`, `localize_figure`); bunlar yalnızca sunum kopyası üretir, veriyi değiştirmez. `find_category_variants` 5.000'den fazla benzersiz değerli sütunları taramaz.
+
+Zaman serisi kuralları (`core/timeseries.py`):
+
+- Frekans otomatik seçilir: aylık → haftalık → günlük sırasıyla, mevsimselliği (iki tam döngü + tahmin ufku) ölçülebilen ve dönemlerinin en fazla %20'si boş olan ilk frekans. Hiçbiri yoksa mevsimsellik olmadan en kaba yoğun frekans.
+- Kenar dönemler sessizce silinmez: tam kapsanmayan ilk/son hafta-ay, tipik değerin %10'unun altındaki seyrek başlangıç/bitiş ve sağdan kesilen son dönemler (önceki medyanın yarısının altı, günlükte en fazla 7) dışarıda bırakılır ve her biri `notes` içinde okura yazılır.
+- Model seçimi her eğitim penceresinde yalnızca eğitim verisiyle AICc üzerinden yapılır (sönümlü / doğrusal / trendsiz ETS); geriye dönük test penceresine bakılmaz. Model mevsimsel naif tahmini %5 geçemezse hüküm bunu açıkça söyler; tahmin yine gösterilir.
+- Mevsimsellik gücü olağan dışı dönemler (|z| ≥ 4) hariç ölçülür; tek bir kampanya günü haftalık döngüyü gizlememeli.
+- statsmodels 0.15'te `ETSModel` numpy girdiyle `get_prediction` çağrısında çöküyor; modele tamsayı indeksli `pd.Series` verilir.
+- Tarih eksenlerinde Plotly'nin İngilizce ay adları yerine `tickformat="%m.%Y"` kullanılır.
