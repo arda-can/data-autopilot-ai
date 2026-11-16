@@ -259,7 +259,9 @@ if selected_target != "-- Hedef seçin --":
 if automl is not None:
     st.write(f"**Problem tipi:** {automl.problem_type}")
     st.write(f"**En iyi model:** {automl.best_model}")
-    (st.success if automl.beats_baseline else st.warning)(automl.verdict)
+    (st.success if automl.beats_baseline and not automl.leakage_warnings else st.warning)(automl.verdict)
+    for leakage_warning in automl.leakage_warnings:
+        st.warning(leakage_warning)
     st.subheader("Leaderboard")
     st.dataframe(display_frame(automl.leaderboard), width="stretch", hide_index=True)
     st.subheader("Özellik Önemi")

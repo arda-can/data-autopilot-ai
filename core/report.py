@@ -63,6 +63,7 @@ class ReportModelSummary(BaseModel):
     beats_baseline: bool
     verdict: str
     leaderboard: list[dict[str, Any]] = Field(default_factory=list)
+    leakage_warnings: list[str] = Field(default_factory=list)
     top_features: list[ReportFeature] = Field(default_factory=list)
 
 
@@ -138,6 +139,7 @@ def _model_summary(result: AutopilotResult) -> ReportModelSummary | None:
         best_score=automl.best_score,
         beats_baseline=automl.beats_baseline,
         verdict=automl.verdict,
+        leakage_warnings=list(automl.leakage_warnings),
         leaderboard=[
             {key: (float(value) if isinstance(value, float) else value) for key, value in row.items()}
             for row in automl.leaderboard.round(4).to_dict("records")
@@ -183,6 +185,11 @@ def build_report(
     if timeseries is not None:
         headline.append(timeseries.trend_text)
     headline.append(model.verdict if model else (result.automl_message or "Tahmin modeli eğitilmedi."))
+    if model and model.leakage_warnings:
+        headline.append(
+            f"Model sonucu güvenilir olmayabilir: {len(model.leakage_warnings)} özellikte olası hedef sızıntısı var "
+            "(ayrıntı önerilerde)."
+        )
 
     recommendations: list[str] = []
     for finding in after.domain_findings:
@@ -235,7 +242,9 @@ def build_report(
             "Zaman serisi tahmini naif yöntemi anlamlı biçimde geçemedi; planlamada yalnızca kaba yön göstergesi "
             "olarak kullanılmalı."
         )
-    if model and model.beats_baseline and model.top_features:
+    if model and model.leakage_warnings:
+        recommendations.extend(model.leakage_warnings)
+    elif model and model.beats_baseline and model.top_features:
         names = ", ".join(feature.name for feature in model.top_features[:3])
         recommendations.append(f"“{model.target}” üzerinde en etkili değişkenler: {names}. Bu değişkenler öncelikli izlenmeli.")
     elif model:
@@ -455,7 +464,9 @@ def render_html(
     parts.append("<section><h2>Tahmin Modeli</h2>")
     if report.model:
         model = report.model
-        parts.append(f'<p class="verdict{" good" if model.beats_baseline else ""}">{escape(model.verdict)}</p>')
+        trusted = model.beats_baseline and not model.leakage_warnings
+        parts.append(f'<p class="verdict{" good" if trusted else ""}">{escape(model.verdict)}</p>')
+        parts.extend(f'<p class="verdict">{escape(item)}</p>' for item in model.leakage_warnings)
         parts.append(
             '<p class="facts">'
             f"<span><b>Hedef:</b> {escape(model.target)}</span>"
@@ -666,6 +677,7 @@ def render_pdf(
         model = report.model
         story += [
             para(model.verdict),
+            *[para(item) for item in model.leakage_warnings],
             Spacer(1, 4),
             para(f"Hedef: {model.target}   |   Problem tipi: {model.problem_type}   |   En iyi model: {model.best_model}", note),
             Spacer(1, 6),

@@ -65,3 +65,45 @@ def test_missing_values_in_features_are_handled_inside_pipeline(orders: pd.DataF
     frame.loc[frame.index[::5], "product_category_name"] = None
     result = AutoMLEngine().run(frame, "price")
     assert not result.leaderboard.empty
+
+
+# --- Hedef sızıntısı uyarısı -----------------------------------------------------------------------
+
+
+def test_post_outcome_column_is_flagged_as_leakage(orders: pd.DataFrame) -> None:
+    """Teslim tarihi yalnızca teslim edilen siparişlerde dolu: sipariş durumunu ele verir."""
+    from core.executor import ActionExecutor
+
+    frame = ActionExecutor().parse_datetime_columns(orders)
+    result = AutoMLEngine().run(frame, "order_status")
+    assert result.beats_baseline
+    assert result.leakage_suspects == ["order_delivered_customer_date"]
+    warning = result.leakage_warnings[0]
+    assert warning.startswith("Olası hedef sızıntısı: “order_delivered_customer_date”")
+    assert "dolu olduğu kayıtların %100'inde hedef “delivered”" in warning
+
+
+def test_legitimate_strong_predictors_are_not_flagged(orders: pd.DataFrame) -> None:
+    result = AutoMLEngine().run(orders, "price")
+    assert result.beats_baseline and result.leakage_suspects == [] and result.leakage_warnings == []
+
+
+def test_transformed_copy_of_target_is_flagged() -> None:
+    rng = np.random.default_rng(2)
+    target = rng.normal(100, 20, 400)
+    frame = pd.DataFrame({
+        "tutar": target,
+        "kdv_dahil_tutar": target * 1.2,
+        "a": rng.normal(size=400),
+        "b": rng.normal(size=400),
+    })
+    result = AutoMLEngine().run(frame, "tutar")
+    assert "kdv_dahil_tutar" in result.leakage_suspects
+    assert "“kdv_dahil_tutar” sütunu modelin" in result.leakage_warnings[0]
+
+
+def test_no_leakage_check_when_model_does_not_beat_baseline() -> None:
+    rng = np.random.default_rng(1)
+    frame = pd.DataFrame({"a": rng.normal(size=300), "b": rng.normal(size=300), "hedef_deger": rng.normal(size=300)})
+    result = AutoMLEngine().run(frame, "hedef_deger")
+    assert not result.beats_baseline and result.leakage_warnings == []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import pandas as pd
@@ -39,6 +39,15 @@ class AutoMLResult:
     best_score: float = 0.0
     beats_baseline: bool = False
     verdict: str = ""
+    leakage_suspects: list[str] = field(default_factory=list)
+    leakage_warnings: list[str] = field(default_factory=list)
+
+
+# Tek bir özellik, modelin taban üzerindeki kazancının bu kadarını tek başına sağlıyorsa sızıntı şüphesi.
+LEAKAGE_SHARE = 0.90
+# Yalnızca boş/dolu bilgisi kazancın bu kadarını açıklıyorsa (sonradan doldurulan alan izi).
+LEAKAGE_MISSING_SHARE = 0.50
+_LEAKAGE_CANDIDATES = 5
 
 
 class AutoMLEngine:
@@ -127,6 +136,13 @@ class AutoMLEngine:
                 f"en iyi model {best_text}). Bu hedef mevcut sütunlarla güvenilir biçimde tahmin edilemiyor."
             )
         importance = self._importance(fitted[best_model], X_test, y_test)
+        suspects, warnings_text = (
+            self._leakage_check(
+                X_train, X_test, y_train, y_test, features, importance,
+                problem_type, baseline_score, best_score,
+            )
+            if beats_baseline else ([], [])
+        )
         figure = px.bar(
             importance.head(30).sort_values("Importance"),
             x="Importance", y="Feature", orientation="h",
@@ -136,7 +152,115 @@ class AutoMLEngine:
             problem_type, leaderboard, best_model, importance, localize_figure(figure),
             metric=sort_column, baseline_model=baseline_name, baseline_score=baseline_score,
             best_score=best_score, beats_baseline=beats_baseline, verdict=verdict,
+            leakage_suspects=suspects, leakage_warnings=warnings_text,
         )
+
+    def _leakage_check(
+        self, X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Series, y_test: pd.Series,
+        features: list[str], importance: pd.DataFrame, problem_type: str,
+        baseline_score: float, best_score: float,
+    ) -> tuple[list[str], list[str]]:
+        """Olası hedef sızıntısını iki imzayla arar; sonuç uyarıdır, sütun otomatik çıkarılmaz.
+
+        1. Eksiklik imzası: bir sütunun yalnızca boş olup olmaması, modelin taban üzerindeki kazancının en az
+           %50'sini açıklıyorsa (ör. "teslim tarihi boş" ⇔ "sipariş teslim edilmedi"). Sonuç gerçekleştikten
+           sonra doldurulan alanların tipik izidir. Eksik değeri olan tüm özelliklerde ucuzca hesaplanır.
+        2. Baskınlık imzası: en önemli özelliklerden biri, tek başına kazancın en az %90'ını sağlıyorsa
+           (ör. hedefin kopyası veya dönüştürülmüş hali).
+        Her ikisi de aynı test bölmesinde, aynı metrikle ölçülür.
+        """
+        lift = best_score - baseline_score
+        if lift <= 0:
+            return [], []
+        classification = problem_type == "Classification"
+
+        def metric(truth: pd.Series, predicted: Any) -> float:
+            return (
+                f1_score(truth, predicted, average="weighted", zero_division=0)
+                if classification else r2_score(truth, predicted)
+            )
+
+        def source(column: str) -> str:
+            for name in features:
+                if column == name or column in (f"{name}_month", f"{name}_dayofweek"):
+                    return name
+            return column
+
+        groups: dict[str, list[str]] = {}
+        for column in X_train.columns:
+            groups.setdefault(source(str(column)), []).append(column)
+        suspects: list[str] = []
+        warnings_text: list[str] = []
+
+        def flag(name: str, share: float, detail: str) -> None:
+            if name in suspects:
+                return
+            suspects.append(name)
+            warnings_text.append(
+                f"Olası hedef sızıntısı: “{name}” {detail} modelin taban üzerindeki başarısının "
+                f"%{min(share, 1.0) * 100:.0f}'ini tek başına açıklıyor. Bu bilgi hedefle aynı anda ya da sonra "
+                "oluşuyorsa (ör. teslimat tarihi → sipariş durumu) tahmin anında bilinmez; sütunu çıkarıp modeli "
+                "yeniden değerlendirin."
+            )
+
+        # 1. Eksiklik imzası: ikili gösterge için en iyi tahmin, grup başına en sık sınıf / ortalamadır.
+        for name, columns in groups.items():
+            train_missing = X_train[columns].isna().any(axis=1)
+            test_missing = X_test[columns].isna().any(axis=1)
+            if not train_missing.any() or train_missing.all():
+                continue
+            if classification:
+                by_group = y_train.groupby(train_missing).agg(lambda values: values.mode().iloc[0])
+            else:
+                by_group = y_train.groupby(train_missing).mean()
+            fallback = by_group.iloc[0]
+            predicted = test_missing.map(lambda missing: by_group.get(missing, fallback))
+            share = (metric(y_test, predicted) - baseline_score) / lift
+            if share >= LEAKAGE_MISSING_SHARE:
+                detail = "sütununun boş olup olmaması"
+                if classification:
+                    present = y_train[~train_missing].value_counts(normalize=True)
+                    if present.iloc[0] >= 0.95:
+                        detail = (
+                            f"sütununun boş olup olmaması (dolu olduğu kayıtların %{present.iloc[0] * 100:.0f}'inde "
+                            f"hedef “{present.index[0]}”)"
+                        )
+                flag(name, share, detail)
+
+        # 2. Baskınlık imzası: en önemli özellikler tek başına sığ bir modelle.
+        ranked: list[str] = []
+        for column in importance.sort_values("Importance", ascending=False)["Feature"]:
+            name = source(str(column))
+            if name not in ranked:
+                ranked.append(name)
+        for name in ranked[:_LEAKAGE_CANDIDATES]:
+            if name in suspects:
+                continue
+            columns = groups.get(name, [])
+            numeric = X_train[columns].select_dtypes(include="number").columns.tolist()
+            categorical = [c for c in columns if c not in numeric]
+            preprocessor = ColumnTransformer([
+                ("numeric", SimpleImputer(strategy="median", add_indicator=True), numeric),
+                ("categorical", Pipeline([
+                    ("imputer", SimpleImputer(strategy="constant", fill_value="__eksik__")),
+                    ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False, max_categories=30)),
+                ]), categorical),
+            ])
+            model = (
+                HistGradientBoostingClassifier(max_depth=3, max_iter=60, random_state=self.random_state)
+                if classification
+                else HistGradientBoostingRegressor(max_depth=3, max_iter=60, random_state=self.random_state)
+            )
+            single = Pipeline([("preprocessor", preprocessor), ("model", model)])
+            try:
+                single.fit(X_train[columns].astype({c: str for c in categorical}), y_train)
+                predictions = single.predict(X_test[columns].astype({c: str for c in categorical}))
+            except ValueError:
+                continue
+            share = (metric(y_test, predictions) - baseline_score) / lift
+            if share >= LEAKAGE_SHARE:
+                flag(name, share, "sütunu")
+        return suspects, warnings_text
 
     @staticmethod
     def _problem_type(target: pd.Series, target_col: str = "") -> str:

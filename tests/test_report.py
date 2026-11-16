@@ -100,3 +100,21 @@ def test_app_builds_report_downloads() -> None:
     files = app.session_state["report_files"]
     assert files["pdf"].startswith(b"%PDF")
     assert "Yönetici Özeti" in files["html"].decode("utf-8")
+
+
+def test_report_replaces_feature_advice_with_leakage_warning(orders_result: AutopilotResult, orders: pd.DataFrame) -> None:
+    from dataclasses import replace
+
+    from core.automl import AutoMLEngine
+    from core.executor import ActionExecutor
+
+    leaky = AutoMLEngine().run(ActionExecutor().parse_datetime_columns(orders), "order_status")
+    result = replace(orders_result, suggested_target="order_status", automl_result=leaky)
+    report = build_report(result, "siparisler.csv", WHEN)
+    assert report.model is not None and report.model.leakage_warnings == leaky.leakage_warnings
+    assert any(item.startswith("Olası hedef sızıntısı") for item in report.recommendations)
+    assert not any("öncelikli izlenmeli" in item for item in report.recommendations)
+    assert any("olası hedef sızıntısı var" in item for item in report.headline)
+    page = render_html(report, embed_plotly=False)
+    assert leaky.leakage_warnings[0].split("“")[0] in page
+    assert '<p class="verdict good">' not in page.split("<h2>Tahmin Modeli</h2>")[1].split("</section>")[0]
