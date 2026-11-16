@@ -20,7 +20,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from pydantic import BaseModel, Field
 
-from core.columns import is_text_series, name_tokens
+from core.columns import is_identifier_name, is_text_series, name_tokens
 from core.formatting import decimal_tr, integer_tr
 from core.health import is_nonnegative_name
 from core.ingestion import read_local_csv
@@ -302,8 +302,8 @@ def _aggregate(frame: pd.DataFrame, key: str, prefix: str) -> pd.DataFrame:
             continue
         series = frame[column]
         if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
-            if _key_like(series) and series.nunique() > _MAX_MODE_CATEGORIES:
-                continue  # başka bir kimlik; ortalaması anlamsız
+            if is_identifier_name(column):
+                continue  # kimlik/kod: ortalaması anlamsız. Tam sayı olmak tek başına kimlik göstergesi değildir.
             parts.append(grouped[column].mean().rename(f"{prefix}_{column}_ort"))
             if is_nonnegative_name(column):
                 parts.append(grouped[column].sum(min_count=1).rename(f"{prefix}_{column}_toplam"))

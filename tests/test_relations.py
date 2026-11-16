@@ -204,3 +204,22 @@ def test_null_keys_never_match() -> None:
     assert frame.loc[frame["customer_id"].isna(), "customer_city"].isna().all()
     assert not frame["customer_city"].isin(["YANLIŞ-1", "YANLIŞ-2"]).any()
     assert result.logs[0].match_rate == pytest.approx(28 / 30, abs=1e-4)
+
+
+def test_integer_measures_are_aggregated_but_ids_are_not() -> None:
+    rng = np.random.default_rng(3)
+    orders = pd.DataFrame({"order_id": [f"o{index}" for index in range(40)]})
+    items = pd.DataFrame({
+        "order_id": [f"o{index % 40}" for index in range(120)],
+        "order_item_id": [1 + index // 40 for index in range(120)],
+        "seller_code_id": rng.integers(1000, 9000, 120),
+        "price": rng.integers(1, 61, 120),
+    })
+    result = apply_plan({"orders": orders, "items": items}, JoinPlan(base="orders", steps=[JoinStep(
+        table="items", left_table="orders", left_column="order_id", right_column="order_id", mode="topla", depth=1,
+    )]))
+    columns = set(result.frame.columns)
+    assert {"items_price_ort", "items_price_toplam", "items_kayıt_sayısı"} <= columns
+    assert not any(name.startswith(("items_order_item_id", "items_seller_code_id")) for name in columns)
+    expected = items.groupby("order_id")["price"].sum()
+    assert result.frame.set_index("order_id")["items_price_toplam"].to_dict() == expected.to_dict()
