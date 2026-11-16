@@ -3,14 +3,33 @@
 from __future__ import annotations
 
 import logging
+import re
 from io import BytesIO
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from core.formatting import decimal_tr, localize_figure
 
 logger = logging.getLogger(__name__)
+
+_CSS_RGB = re.compile(r"rgba?\(([^)]*)\)")
+_DASHES = {"dash": "--", "dot": ":", "dashdot": "-.", "longdash": "--", "longdashdot": "-."}
+
+
+def _mpl_color(value: Any, default: Any) -> Any:
+    """Plotly renk değerini Matplotlib'e çevirir: `rgba(217,119,6,0.22)` → (r, g, b, a); liste öğe öğe."""
+    if isinstance(value, (list, tuple, np.ndarray)) and not isinstance(value, str):
+        return [_mpl_color(item, default) for item in value]
+    if not isinstance(value, str) or not value.strip():
+        return default
+    match = _CSS_RGB.fullmatch(value.strip())
+    if not match:
+        return value.strip()
+    parts = [float(part) for part in match.group(1).split(",")]
+    return (*(channel / 255 for channel in parts[:3]), parts[3] if len(parts) > 3 else 1.0)
+
 
 _SKIPPED = frozenset({"scatter3d", "surface", "mesh3d", "cone", "volume", "isosurface", "parcoords"})
 
@@ -61,9 +80,9 @@ def _matplotlib_png(figure: Any) -> bytes:
         axis = canvas.add_subplot(111, projection="polar" if polar else None)
         axis.set_facecolor("white")
         formatter = FuncFormatter(lambda value, position: decimal_tr(value, 2))
-        axis.yaxis.set_major_formatter(formatter)
-        axis.xaxis.set_major_formatter(formatter)
         labels_present = False
+        date_x = False
+        previous_y: np.ndarray | None = None
         numeric_x, numeric_y = True, True
         for index, trace in enumerate(figure.data):
             color = palette[index % len(palette)]
@@ -102,11 +121,12 @@ def _matplotlib_png(figure: Any) -> bytes:
                          autopct=lambda value: f"%{decimal_tr(value)}", colors=palette)
                 numeric_x = numeric_y = False
             elif kind == "bar":
+                bar_color = _mpl_color(trace.marker.color, color)
                 if trace.orientation == "h":
-                    axis.barh(list(trace.y), trace.x, color=color, label=label)
+                    axis.barh(list(trace.y), trace.x, color=bar_color, label=label)
                     numeric_y = False
                 else:
-                    axis.bar(list(trace.x), trace.y, color=color, label=label)
+                    axis.bar(list(trace.x), trace.y, color=bar_color, label=label)
                     numeric_x = np.asarray(trace.x).dtype.kind in "iuf"
             elif kind == "violin":
                 if any(item.type == "histogram2dcontour" for item in figure.data):
@@ -129,18 +149,43 @@ def _matplotlib_png(figure: Any) -> bytes:
                 values = trace.x if trace.x is not None else trace.y
                 axis.hist(np.asarray(values, dtype=float), bins=20, color=color, alpha=0.7, label=label)
             elif kind in {"scatter", "scattergl"}:
-                x, y = list(trace.x), list(trace.y)
+                x, y = np.asarray(trace.x), np.asarray(trace.y)
+                if trace.showlegend is False:
+                    label = "_nolegend_"
+                if x.dtype.kind in "OU":
+                    parsed = pd.to_datetime(pd.Series(x), errors="coerce", format="ISO8601")
+                    if parsed.notna().all():
+                        x = parsed.to_numpy()
+                date_x |= x.dtype.kind == "M"
+                line_color = _mpl_color(trace.line.color, color)
                 if "lines" in (trace.mode or "") or trace.fill:
-                    axis.plot(x, y, color=color, label=label)
+                    # Plotly'de genişliği 0 olan çizgi yalnızca bant sınırıdır; çizilmez.
+                    if trace.line.width != 0:
+                        axis.plot(x, y, color=line_color, label=label,
+                                  linewidth=trace.line.width or 1.5, linestyle=_DASHES.get(trace.line.dash, "-"))
                     if trace.fill:
-                        axis.fill_between(x, y, color=color, alpha=0.15)
+                        fill_color = _mpl_color(trace.fillcolor, None)
+                        fill_label = label if trace.line.width == 0 else "_nolegend_"
+                        lower = (
+                            previous_y if trace.fill == "tonexty" and previous_y is not None
+                            and len(previous_y) == len(y) else 0
+                        )
+                        axis.fill_between(x, lower, y, color=fill_color or line_color,
+                                          alpha=None if fill_color else 0.15, linewidth=0, label=fill_label)
                 else:
-                    axis.scatter(x, y, s=10, alpha=0.6, color=color, label=label)
-                numeric_x = np.asarray(x).dtype.kind in "iuf"
-                numeric_y = np.asarray(y).dtype.kind in "iuf"
+                    axis.scatter(x, y, s=24, color=_mpl_color(trace.marker.color, color), label=label, zorder=3)
+                previous_y = y.astype(float) if y.dtype.kind in "iuf" else None
+                numeric_x = x.dtype.kind in "iuf"
+                numeric_y = y.dtype.kind in "iuf"
             else:
                 raise ValueError(f"Statik çizim desteklenmiyor: {kind}")
-        if numeric_x:
+        if date_x:
+            from matplotlib import dates as mdates
+
+            low, high = axis.get_xlim()
+            axis.xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=10))
+            axis.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m.%Y" if high - low < 120 else "%m.%Y"))
+        elif numeric_x:
             axis.xaxis.set_major_formatter(formatter)
         if numeric_y:
             axis.yaxis.set_major_formatter(formatter)

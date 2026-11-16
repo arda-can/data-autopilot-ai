@@ -627,6 +627,8 @@ class TimeSeriesEngine:
             xaxis_title="Tarih", yaxis_title=value_label, hovermode="x unified",
             legend={"orientation": "h", "y": -0.2},
         )
+        # Plotly'nin varsayılan tarih etiketleri İngilizce ay adı basar ("Apr 2017"); sayısal Türkçe biçim kullanılır.
+        figure.update_xaxes(tickformat="%m.%Y", hoverformat="%d.%m.%Y")
         return localize_figure(figure)
 
     @staticmethod

@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from core.autopilot import AutopilotResult
 from core.health import LOG_METHOD, OutlierFinding
 from core.formatting import decimal_tr, integer_tr, localize_figure
+from core.timeseries import TimeSeriesSummary, format_period
 
 _PROBLEM_TYPES = {"Classification": "Sınıflandırma", "Regression": "Regresyon"}
 
@@ -85,6 +86,8 @@ class ExecutiveReport(BaseModel):
     charts: list[ReportChart]
     model: ReportModelSummary | None = None
     model_message: str = ""
+    timeseries: TimeSeriesSummary | None = None
+    timeseries_message: str = ""
 
 
 # --- Türkçe biçimlendirme --------------------------------------------------------------------
@@ -176,6 +179,9 @@ def build_report(
             f"{len(outliers)} sütunda şüpheli uç değer bulundu (en belirgini: {outliers[0].column}); "
             "değerler değiştirilmedi, yalnızca raporlandı."
         )
+    timeseries = result.timeseries.summary if result.timeseries is not None else None
+    if timeseries is not None:
+        headline.append(timeseries.trend_text)
     headline.append(model.verdict if model else (result.automl_message or "Tahmin modeli eğitilmedi."))
 
     recommendations: list[str] = []
@@ -215,6 +221,20 @@ def build_report(
         recommendations.append(
             f"“{finding.column}” sütununda {_int(finding.count)} şüpheli uç değer var: {' ve '.join(extremes)}. {advice}"
         )
+    if timeseries is not None and timeseries.anomalies:
+        details = "; ".join(
+            f"{item.label} ({item.direction}: gözlenen {_num(item.observed)}, beklenen {_num(item.expected)})"
+            for item in timeseries.anomalies[:3]
+        )
+        recommendations.append(
+            f"{timeseries.value_label} serisinde olağan dışı dönemler: {details}. "
+            "Kampanya, tatil veya veri hatası olup olmadığı doğrulanmalı."
+        )
+    if timeseries is not None and not timeseries.beats_baseline:
+        recommendations.append(
+            "Zaman serisi tahmini naif yöntemi anlamlı biçimde geçemedi; planlamada yalnızca kaba yön göstergesi "
+            "olarak kullanılmalı."
+        )
     if model and model.beats_baseline and model.top_features:
         names = ", ".join(feature.name for feature in model.top_features[:3])
         recommendations.append(f"“{model.target}” üzerinde en etkili değişkenler: {names}. Bu değişkenler öncelikli izlenmeli.")
@@ -251,7 +271,20 @@ def build_report(
         ],
         model=model,
         model_message=result.automl_message,
+        timeseries=timeseries,
+        timeseries_message=result.timeseries_message,
     )
+
+
+def _timeseries_facts(series: TimeSeriesSummary) -> list[tuple[str, str]]:
+    period = (
+        f"{format_period(series.start, series.frequency)} – {format_period(series.end, series.frequency)} "
+        f"({_int(series.periods)} {series.period_unit})"
+    )
+    return [
+        ("Tarih sütunu", series.date_column), ("Ölçü", series.value_label),
+        ("Frekans", series.frequency_label), ("Dönem", period), ("Model", series.model_name),
+    ]
 
 
 def _kpis(report: ExecutiveReport) -> list[tuple[str, str, str]]:
@@ -283,6 +316,12 @@ def _tables(report: ExecutiveReport) -> dict[str, tuple[list[str], list[list[str
         tables["actions"] = (
             ["Sütun", "İşlem", "Gerekçe", "Etkilenen"],
             [[item.column, item.action, item.reason, _int(item.affected_count)] for item in report.actions[:40]],
+        )
+    if report.timeseries and report.timeseries.anomalies:
+        tables["anomalies"] = (
+            ["Dönem", "Gözlenen", "Beklenen", "Sapma (z)", "Yön"],
+            [[item.label, _num(item.observed), _num(round(item.expected, 1)), _dec(item.z), item.direction]
+             for item in report.timeseries.anomalies],
         )
     if report.model and report.model.leaderboard:
         headers = list(report.model.leaderboard[0])
@@ -344,11 +383,13 @@ def render_html(
     figures: Sequence[Any] = (),
     model_figure: Any | None = None,
     embed_plotly: bool = True,
+    timeseries_figures: Sequence[Any] = (),
 ) -> str:
     """Kendi kendine yeten tek dosyalık HTML raporu.
 
     `figures`, `report.charts` ile aynı sıradaki Plotly figürleridir. `embed_plotly=True`
     iken plotly.js dosyaya gömülür (çevrimdışı açılır, ~5 MB); `False` iken CDN'den yüklenir.
+    `timeseries_figures`: zaman serisi tahmin ve mevsimsellik grafikleri (varsa).
     """
     plotly_loaded = False
 
@@ -380,6 +421,24 @@ def render_html(
         f"<section><h2>Yönetici Özeti</h2>{_html_list(report.headline)}</section>",
         f"<section><h2>Öneriler</h2>{_html_list(report.recommendations, ordered=True)}</section>",
     ]
+
+    if report.timeseries:
+        series = report.timeseries
+        parts.append("<section><h2>Zaman Serisi</h2>")
+        parts.append(f'<p class="verdict{" good" if series.beats_baseline else ""}">{escape(series.verdict)}</p>')
+        parts.append(
+            '<p class="facts">' + "".join(f"<span><b>{escape(label)}:</b> {escape(value)}</span>"
+                                          for label, value in _timeseries_facts(series)) + "</p>"
+        )
+        parts.append(_html_list([series.trend_text, series.seasonality_text, series.forecast_text]))
+        for figure in timeseries_figures:
+            parts.append(f'<div class="chart" style="margin-top:16px">{plot(figure)}</div>')
+        if "anomalies" in tables:
+            parts.append('<h3 style="margin-top:20px">Olağan dışı dönemler</h3>' + _html_table(*tables["anomalies"]))
+        parts.extend(f'<p class="note" style="margin-top:8px">Not: {escape(item)}</p>' for item in series.notes)
+        parts.append("</section>")
+    elif report.timeseries_message:
+        parts.append(f"<section><h2>Zaman Serisi</h2><p>{escape(report.timeseries_message)}</p></section>")
 
     if report.charts and figures:
         parts.append('<section><h2>Öne Çıkan Grafikler</h2><div class="charts">')
@@ -505,7 +564,9 @@ def _pdf_fonts() -> tuple[str, str, Callable[[str], str]]:
     return "Helvetica", "Helvetica-Bold", _ascii_safe
 
 
-def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
+def render_pdf(
+    report: ExecutiveReport, figures: Sequence[Any] = (), timeseries_figures: Sequence[Any] = ()
+) -> bytes:
     """A4 PDF; rapor modelinden ayrı alınan grafikler en fazla altı statik görsele çevrilir."""
     from core.chart_export import can_export, chart_png
     from reportlab.graphics.charts.barcharts import HorizontalBarChart
@@ -577,6 +638,29 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
     story += [kpi_table, para("Yönetici Özeti", h2), *bullets(report.headline)]
     story += [para("Öneriler", h2), *bullets(report.recommendations, numbered=True)]
 
+    fallbacks = 0
+    timeseries_images = 0
+    if report.timeseries:
+        series = report.timeseries
+        facts = "   |   ".join(f"{label}: {value}" for label, value in _timeseries_facts(series))
+        story += [para("Zaman Serisi", h2), para(series.verdict), Spacer(1, 4), para(facts, note), Spacer(1, 6)]
+        story += bullets([series.trend_text, series.seasonality_text, series.forecast_text])
+        for figure in timeseries_figures:
+            if not can_export(figure):
+                continue
+            png = chart_png(figure)
+            fallbacks += int(getattr(png, "fallback", False))
+            story.append(Image(BytesIO(png), width=content_width, height=content_width * 0.56))
+            timeseries_images += 1
+        if "anomalies" in tables:
+            story += [
+                para("Olağan dışı dönemler", h3),
+                table(*tables["anomalies"], widths=[0.28, 0.18, 0.18, 0.18, 0.18]),
+            ]
+        story += [para(f"Not: {item}", note) for item in series.notes]
+    elif report.timeseries_message:
+        story += [para("Zaman Serisi", h2), para(report.timeseries_message)]
+
     story.append(para("Tahmin Modeli", h2))
     if report.model:
         model = report.model
@@ -637,8 +721,8 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
         # zorunlu sayfa sonu yoktur. Bölüm başlığı ilk grafikle aynı sayfada kalır.
         image_width = content_width * _PDF_CHART_WIDTH
         heading: list[Any] = [para("Öne Çıkan Grafikler", h2)]
-        budget = 6 - int(bool(report.model and report.model.top_features))
-        exported = fallbacks = 0
+        budget = 6 - int(bool(report.model and report.model.top_features)) - timeseries_images
+        exported = 0
         shown: set[int] = set()  # PDF'te görseli basılan grafiklerin sırası
         for position, (chart_summary, figure) in enumerate(zip(report.charts, figures)):
             if exported >= budget:
@@ -657,11 +741,6 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
             heading = []
             exported += 1
             shown.add(position)
-        if fallbacks:
-            story.append(para(
-                f"Not: {fallbacks} grafik birincil çizici (Kaleido) kullanılamadığı için yedek çizici (Matplotlib) "
-                "ile üretildi; görünümü HTML rapordaki etkileşimli grafikten farklı olabilir.", note,
-            ))
         # Görseli basılan grafiğin bulgusu zaten altında yazıyor; burada tekrar edilmez. Geriye yalnızca
         # PDF'e girmeyen grafikler (3B, paralel koordinat, sınır dışı) kalır ve nerede bulunacağı belirtilir.
         remaining = [
@@ -672,6 +751,11 @@ def render_pdf(report: ExecutiveReport, figures: Sequence[Any] = ()) -> bytes:
             story.append(para("Diğer Bulgular" if shown else "Öne Çıkan Bulgular", h2))
             story += bullets(remaining)
         story.append(para("Etkileşimli grafikler HTML raporunda yer alır.", note))
+    if fallbacks:
+        story.append(para(
+            f"Not: {fallbacks} grafik birincil çizici (Kaleido) kullanılamadığı için yedek çizici (Matplotlib) "
+            "ile üretildi; görünümü HTML rapordaki etkileşimli grafikten farklı olabilir.", note,
+        ))
     if "actions" in tables:
         story += [para("Uygulanan İşlemler", h2), table(*tables["actions"], widths=[0.22, 0.22, 0.44, 0.12])]
     story += [

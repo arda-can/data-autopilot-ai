@@ -106,6 +106,9 @@ def test_figures_are_built(daily_frame: pd.DataFrame) -> None:
     assert {"Gözlenen", "Eğilim", "Tahmin", "%80 tahmin aralığı", "Olağan dışı"} <= set(names)
     assert result.seasonal_figure is not None
     assert list(result.seasonal_figure.data[0].x)[0] == "Pazartesi"
+    # İngilizce ay kısaltmaları yerine sayısal Türkçe tarih biçimi
+    assert result.forecast_figure.layout.xaxis.tickformat == "%m.%Y"
+    assert result.forecast_figure.layout.xaxis.hoverformat == "%d.%m.%Y"
 
 
 def test_input_is_not_mutated(daily_frame: pd.DataFrame) -> None:

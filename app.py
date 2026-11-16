@@ -161,6 +161,7 @@ else:
     st.info("Bu veri yapısı için güvenilir ve anlamlı otomatik grafik üretilemedi.")
 
 timeseries = result.timeseries
+ts_request: tuple | None = None
 timeseries_error = result.timeseries_message
 ts_dates = date_columns(cleaned)
 if ts_dates:
@@ -271,24 +272,30 @@ st.caption(
     "Özet, öneriler, grafikler ve model sonucu tek dosyada. "
     "Ham satırlar ve audit log örnekleri rapora girmez."
 )
-report_key = (st.session_state.data_signature, selected_target)
+report_key = (st.session_state.data_signature, selected_target, ts_request)
 if st.button("Raporu Hazırla", key="report_button"):
     with st.spinner("Rapor hazırlanıyor..."):
+        ts_figures = [] if timeseries is None else [
+            figure for figure in (timeseries.forecast_figure, timeseries.seasonal_figure) if figure is not None
+        ]
         report = build_report(
             replace(
                 result,
                 suggested_target=selected_target if automl is not None else result.suggested_target,
                 automl_result=automl,
                 automl_message=automl_error or result.automl_message,
+                timeseries=timeseries,
+                timeseries_message=timeseries_error,
             ),
             st.session_state.data_name,
         )
         st.session_state.report_files = {
             "key": report_key,
             "html": render_html(
-                report, [chart.figure for chart in result.charts], automl.figure if automl is not None else None
+                report, [chart.figure for chart in result.charts], automl.figure if automl is not None else None,
+                timeseries_figures=ts_figures,
             ).encode("utf-8"),
-            "pdf": render_pdf(report, [chart.figure for chart in result.charts]),
+            "pdf": render_pdf(report, [chart.figure for chart in result.charts], timeseries_figures=ts_figures),
         }
 report_files = st.session_state.get("report_files")
 if report_files and report_files["key"] == report_key:
