@@ -90,3 +90,46 @@ def test_plain_text_is_not_parsed_as_date(orders: pd.DataFrame) -> None:
     cleaned = ActionExecutor().parse_datetime_columns(orders)
     for column in ("order_id", "order_status", "product_category_name"):
         assert not pd.api.types.is_datetime64_any_dtype(cleaned[column])
+
+
+# --- Plan önerilerine veri koruma kontrolü ---------------------------------------------------------
+
+
+def test_plan_cannot_drop_a_filled_informative_column(dirty: pd.DataFrame) -> None:
+    executor = ActionExecutor()
+    result = executor.execute_plan(dirty, [{"column": "Şehir", "action": "drop_column", "reason": "Gereksiz görünüyor."}])
+    assert "Şehir" in result.columns and executor.audit_logs == []
+    rejected = executor.rejected_actions[0]
+    assert (rejected.column, rejected.action, rejected.plan_reason) == ("Şehir", "drop_column", "Gereksiz görünüyor.")
+    assert "%100,0 kadarı dolu" in rejected.rejection
+
+
+def test_plan_can_drop_empty_or_constant_columns(dirty: pd.DataFrame) -> None:
+    executor = ActionExecutor()
+    result = executor.execute_plan(dirty, [
+        {"column": "Notlar", "action": "drop_column", "reason": "Boş."},
+        {"column": "Sabit Sütun", "action": "drop_column", "reason": "Sabit."},
+    ])
+    assert "Notlar" not in result.columns and "Sabit Sütun" not in result.columns
+    assert executor.rejected_actions == []
+    assert "Plan gerekçesi: Sabit." in executor.audit_logs[1].reason
+
+
+def test_plan_currency_parse_that_would_blank_values_is_rejected() -> None:
+    frame = pd.DataFrame({"tutar": ["10 TL", "20 TL", "30 TL", "yok", "bilinmiyor"] * 10})
+    executor = ActionExecutor()
+    result = executor.execute_plan(frame, [{"column": "tutar", "action": "parse_currency"}])
+    pd.testing.assert_frame_equal(result, frame)
+    assert executor.rejected_actions[0].action == "parse_currency"
+    assert "20 değeri boşaltırdı" in executor.rejected_actions[0].rejection
+
+
+def test_autopilot_surfaces_rejected_plan_actions(monkeypatch, dirty: pd.DataFrame) -> None:
+    from core.autopilot import AutopilotEngine
+    from core.planner import AnalysisPlan, ColumnPlan, GeminiPlanner
+
+    plan = AnalysisPlan(domain="x", problem_type="x", actions=[ColumnPlan(column="Harcama", action="drop_column", reason="LLM önerisi")])
+    monkeypatch.setattr(GeminiPlanner, "create_plan", lambda self, frame, metadata=None: plan)
+    result = AutopilotEngine().run_full_autopilot(dirty)
+    assert "Harcama" in result.cleaned_frame.columns
+    assert [item.column for item in result.rejected_actions] == ["Harcama"]

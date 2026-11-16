@@ -15,7 +15,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from core.automl import AutoMLEngine, AutoMLResult
 from core.columns import is_geo_coordinate_name, is_identifier_column
-from core.executor import ActionExecutor, AuditLog
+from core.executor import ActionExecutor, AuditLog, RejectedAction
 from core.formatting import decimal_tr, localize_figure
 from core.health import DataHealthAnalyzer, HealthReport, OutlierFinding
 from core.metadata import DatasetMetadataCard, MetadataGenerator
@@ -47,6 +47,7 @@ class AutopilotResult:
     outliers: list[OutlierFinding] = field(default_factory=list)
     timeseries: TimeSeriesResult | None = None
     timeseries_message: str = ""
+    rejected_actions: list[RejectedAction] = field(default_factory=list)
 
 
 class AutopilotEngine:
@@ -121,6 +122,7 @@ class AutopilotEngine:
             outliers=outliers,
             timeseries=timeseries,
             timeseries_message=timeseries_message,
+            rejected_actions=executor.rejected_actions,
         )
 
     def _select_charts(

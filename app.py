@@ -239,6 +239,11 @@ for finding in after.category_variants:
         f"{finding.group_count} olası kategori kopyası grubu ({finding.affected_count} kayıt). "
         "Birleştirme öncesinde incelenmesi önerilir; değerler değiştirilmedi."
     )
+for rejected in result.rejected_actions:
+    st.warning(
+        f"Plan önerisi uygulanmadı — “{rejected.column}” için {rejected.action}: {rejected.rejection} "
+        f"(Plan gerekçesi: {rejected.plan_reason})"
+    )
 if result.outliers:
     with st.expander(f"Şüpheli aykırı değerler: {len(result.outliers)} sütun (değiştirilmedi)"):
         st.dataframe(

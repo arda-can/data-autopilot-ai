@@ -28,9 +28,24 @@ class AuditLog(BaseModel):
     after_sample: list[Any] = Field(default_factory=list)
 
 
+class RejectedAction(BaseModel):
+    """İzin verilen ama veri koruma kontrolünden geçemeyen plan önerisi (uygulanmadı)."""
+
+    column: str
+    action: str
+    plan_reason: str
+    rejection: str
+
+
 class ActionExecutor:
     def __init__(self) -> None:
         self.audit_logs: list[AuditLog] = []
+        self.rejected_actions: list[RejectedAction] = []
+
+    def _reject(self, column: str, action: str, plan_reason: str, rejection: str) -> None:
+        self.rejected_actions.append(RejectedAction(
+            column=str(column), action=action, plan_reason=plan_reason or "—", rejection=rejection,
+        ))
 
     def _record(self, column: str, action: str, reason: str, count: int,
                 before: pd.Series | list[Any], after: pd.Series | list[Any]) -> None:
@@ -50,17 +65,31 @@ class ActionExecutor:
         return result
 
     def drop_column(self, frame: pd.DataFrame, column: str, reason: str = "") -> pd.DataFrame:
+        """Planın silme önerisini yalnızca %90'dan fazlası boş ya da sabit sütunlarda uygular.
+
+        Aksiyonun izin listesinde olması önerinin veri açısından doğru olduğunu göstermez: dolu ve değişken
+        bir sütun silinmez, öneri gerekçesiyle `rejected_actions` içine kaydedilir.
+        """
         result = frame.copy()
-        if column in result.columns:
-            missing = float(result[column].isna().mean())
-            explanation = (
-                f"%90'dan fazlası boş olduğu için otomatik kaldırıldı (eksik oranı %{decimal_tr(missing * 100)})."
-                if missing > 0.90 else f"Plan aksiyonu uygulandı: {reason or 'Sütunun kaldırılması önerildi.'}"
+        if column not in result.columns:
+            return result
+        series = result[column]
+        missing = float(series.isna().mean())
+        if missing > 0.90:
+            explanation = f"%90'dan fazlası boş olduğu için kaldırıldı (eksik oranı %{decimal_tr(missing * 100)})."
+        elif series.nunique(dropna=False) <= 1:
+            explanation = "Tek değer içerdiği için kaldırıldı."
+        else:
+            self._reject(
+                column, "drop_column", reason,
+                f"Sütunun %{decimal_tr((1 - missing) * 100)} kadarı dolu ve {series.nunique()} farklı değer içeriyor; "
+                "veri kaybını önlemek için yalnızca %90'dan fazlası boş veya sabit sütunlar silinir.",
             )
-            self._record(column, "Sütunu kaldır", explanation,
-                         len(result), result[column].head(5), [])
-            return result.drop(columns=[column])
-        return result
+            return result
+        if reason:
+            explanation += f" Plan gerekçesi: {reason}"
+        self._record(column, "Sütunu kaldır", explanation, len(result), series.dropna(), [])
+        return result.drop(columns=[column])
 
     def drop_high_null_columns(self, frame: pd.DataFrame, threshold: float = 0.90) -> pd.DataFrame:
         result = frame.copy()
@@ -135,12 +164,13 @@ class ActionExecutor:
     def clean_currency_and_numeric_strings(self, frame: pd.DataFrame, column: str | None = None) -> pd.DataFrame:
         """Tamamı sayı biçiminde olan metin sütunlarını sayıya çevirir.
 
-        Otomatik modda kimlik adlı sütunlara dokunmaz ve değerlerin en az %90'ı sayı
-        biçiminde olmalıdır; açıkça sütun verildiğinde eşik %60'tır.
+        Değerlerin en az %90'ı sayı biçiminde olmalıdır; aksi halde kalanlar boşalırdı. Otomatik modda kimlik
+        adlı sütunlara dokunulmaz. Plan bir sütunu açıkça verdiğinde eşik aynıdır; altında kalırsa öneri
+        reddedilir ve gerekçesiyle kaydedilir.
         """
         result = frame.copy()
         explicit = column is not None
-        threshold = 0.60 if explicit else 0.90
+        threshold = 0.90
         columns = [column] if explicit else text_columns(result)
         for current_column in columns:
             if current_column not in result.columns or not is_text_series(result[current_column]):
@@ -149,11 +179,17 @@ class ActionExecutor:
                 continue
             series = result[current_column]
             present = int(series.notna().sum())
-            if not present or numeric_text_ratio(series) < threshold - 0.10:
+            if not present or (not explicit and numeric_text_ratio(series) < threshold - 0.10):
                 continue
             numbers, valid = parse_numeric_text(series)
             converted = int(valid.sum())
             if converted / present < threshold:
+                if explicit:
+                    self._reject(
+                        current_column, "parse_currency", "",
+                        f"Değerlerin yalnızca %{decimal_tr(converted / present * 100)} kadarı sayı biçiminde; "
+                        f"dönüştürme {present - converted} değeri boşaltırdı.",
+                    )
                 continue
             reason = "Para birimi ve yerel sayı biçimi sayısala çevrildi."
             if converted < present:
