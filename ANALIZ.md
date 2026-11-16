@@ -21,9 +21,13 @@ Bu belge sprint öncesi durumu anlatır; aşağıdaki maddeler o tarihten sonra 
 | Y6 — yanıltıcı AutoML sonuçları | ◐ Kısmen | Taban model, Türkçe hüküm, önbellek, örneklem ve olası hedef sızıntısı uyarısı (eksiklik ve baskınlık imzası) eklendi; çapraz doğrulama açık |
 | O7 — okunaksız grafikler | ◐ Kısmen | Renk kırılımı yalnızca en fazla 12 sınıflı kategoriyle yapılıyor; sabit `k=3` ve zaman grafiği açık |
 | 4.1 — zaman serisi otopilotu | ✅ Eklendi | `core/timeseries.py`: otomatik frekans, kenar ve kesim temizliği, STL, anomaliler, AICc ile seçilen ETS, mevsimsel naif tabanla 3 pencereli geriye dönük test, %80 aralıklı tahmin; arayüz ve rapor bölümü |
+| 4.4 — dönem karşılaştırması | ✅ Eklendi | `core/drift.py`: şema, eksik oranı, PSI + KS / ki-kare, trafik ışığı |
+| 4.3 — açıklanabilirlik | ✅ Eklendi | `core/explain.py`: PDP ve what-if (SHAP yerine, bağımlılıksız) |
+| 4.7 — çoklu tablo | ✅ Eklendi | `core/relations.py`: anahtar keşfi, eşleştir/topla, onaylı plan |
+| D3 — ölü kod | ✅ Düzeltildi | `DataChatResult` kaldırıldı |
 | 4.2 — yönetici raporu | ✅ Eklendi | `core/report.py`: HTML (etkileşimli grafikler) ve PDF; Word kademesi açık |
 
-Açık kalanlar: Y4, O1-O4, O6, O8-O9, D1-D2, D4-D9. Sıradaki iş: dönem karşılaştırması (drift).
+Açık kalanlar: Y4, O1-O4, O6, O8-O9, D1-D2, D4-D9; AutoML çapraz doğrulama. Yol haritasındaki beş özellik tamamlandı (bölüm 5.0).
 
 ## Nasıl doğrulandı
 
@@ -353,10 +357,10 @@ Sıralama ölçütü: "bunu bir veri analisti işverenine gösteriyorum". Analis
 | Sıra | Özellik | Ne işe yarar | Demoda / mülakatta | Efor | Yeni bağımlılık |
 |---|---|---|---|---|---|
 | 1 | **Zaman serisi otopilotu** ✅ | Tarih sütunu bulununca trend, mevsimsellik ve güven bantlı tahmin; "geçen dönemin aynısı" tabanıyla geriye dönük test | Olist siparişlerinde tek tıkla aylık trend ve tahmin; "modelim naif tahmini geçiyor mu" sorusuna hazır cevap | M | `statsmodels` (ön onaylı) |
-| 2 | **Dönem karşılaştırması (drift)** | İki dönem veya iki dosya arasında neyin değiştiğini söyler: şema, eksik oranı, dağılım kayması (PSI, KS, ki-kare), trafik ışığı tablosu | "2017 ile 2018 arasında ne değişti?" tek tıkla; analistin her ay yaptığı işin otomatiği | S-M | `scipy` (kurulu, `requirements.txt`'e açıkça eklenmeli) |
-| 3 | **Çoklu tablo keşfi ve birleştirme** | `data/` içindeki tablolar arasında ortak anahtarları bulur, ilişki şemasını çizer, onaylanan birleştirmeyi uygular | Olist'in 9 tablosu tek modele bağlanır; "teslimat gecikmesi yorum puanını nasıl etkiliyor" sorulabilir hale gelir. SQL/ilişkisel düşünceyi gösterir | L | Yok |
-| 4 | **Sohbette filtre, tarih kırılımı ve sorgu şeffaflığı** | Sorulara "2018'de", "İstanbul için", "aylık" gibi koşullar; her cevabın altında eşdeğer pandas ve SQL sorgusu | Mülakatçı kendi sorusunu sorar ve cevabın nasıl hesaplandığını görür; kara kutu olmadığını kanıtlar | M | Yok |
-| 5 | **PDP açıklanabilirlik ve what-if paneli** | En etkili değişkenlerin tahmini nasıl değiştirdiğini gösterir; kaydırıcıyla tek satır tahmini | "Model neden böyle dedi" sorusunun cevabı; etkileşimli an. Analist rolünde ilk dördün gerisinde kalır | M | Yok (sklearn) |
+| 2 | **Dönem karşılaştırması (drift)** ✅ | İki dönem veya iki dosya arasında neyin değiştiğini söyler: şema, eksik oranı, dağılım kayması (PSI, KS, ki-kare), trafik ışığı tablosu | "2017 ile 2018 arasında ne değişti?" tek tıkla; analistin her ay yaptığı işin otomatiği | S-M | `scipy` (kurulu, `requirements.txt`'e açıkça eklenmeli) |
+| 3 | **Çoklu tablo keşfi ve birleştirme** ✅ | `data/` içindeki tablolar arasında ortak anahtarları bulur, ilişki şemasını çizer, onaylanan birleştirmeyi uygular | Olist'in 9 tablosu tek modele bağlanır; "teslimat gecikmesi yorum puanını nasıl etkiliyor" sorulabilir hale gelir. SQL/ilişkisel düşünceyi gösterir | L | Yok |
+| 4 | **Sohbette filtre, tarih kırılımı ve sorgu şeffaflığı** ✅ | Sorulara "2018'de", "İstanbul için", "aylık" gibi koşullar; her cevabın altında eşdeğer pandas ve SQL sorgusu | Mülakatçı kendi sorusunu sorar ve cevabın nasıl hesaplandığını görür; kara kutu olmadığını kanıtlar | M | Yok |
+| 5 | **PDP açıklanabilirlik ve what-if paneli** ✅ | En etkili değişkenlerin tahmini nasıl değiştirdiğini gösterir; kaydırıcıyla tek satır tahmini | "Model neden böyle dedi" sorusunun cevabı; etkileşimli an. Analist rolünde ilk dördün gerisinde kalır | M | Yok (sklearn) |
 
 Liste dışı ama en ucuz kazanım: README'ye demo GIF'i ve Streamlit Community Cloud yayını (S, bağımlılıksız). Özellik değil, ama işverenin depoyu klonlamadan görebildiği tek şey bu.
 

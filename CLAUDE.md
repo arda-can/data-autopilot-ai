@@ -47,10 +47,12 @@ Bunların her biri gerçek bir hatadan doğdu (ayrıntı: `ANALIZ.md`).
 - `AuditLog` alanı `affected_count`; `.cursorrules` `rows_affected` diyor. Örnekler etkilenen satırlardan değil ilk 5 satırdan alınıyor (ANALIZ.md O2).
 - LLM planı için korkuluk ve hata görünürlüğü eksik; Gemini yolu gerçek anahtarla test edilmedi (ANALIZ.md Y4).
 - AutoML'de çapraz doğrulama yok (tek 80/20 bölme).
+- Sızıntı uyarısı zamansal sırayı bilemez: tahmin anında bilinen bir bilgi de işaretlenebilir (ör. yorum puanı için teslim tarihi). Uyarı bu yüzden koşullu yazılır ve sütun otomatik çıkarılmaz.
+- Dönem karşılaştırması, PDP ve çoklu tablo sonuçları henüz yönetici raporuna girmiyor (yalnızca arayüzde).
 
 ## Yol haritası
 
-`ANALIZ.md` bölüm 5. Tamamlananlar: kritik düzeltmeler, AutoML taban modeli, HTML/PDF yönetici raporu (`core/report.py`), zaman serisi otopilotu (`core/timeseries.py`). Sıradaki iş: dönem karşılaştırması (drift).
+`ANALIZ.md` bölüm 5. Tamamlananlar: kritik düzeltmeler, AutoML taban modeli ve sızıntı uyarısı, HTML/PDF yönetici raporu (`core/report.py`), zaman serisi (`core/timeseries.py`), dönem karşılaştırması (`core/drift.py`), çoklu tablo (`core/relations.py`), sohbet filtreleri ve SQL şeffaflığı (`core/chat.py`), PDP ve what-if (`core/explain.py`). Yol haritasındaki beş özellik bitti; sıradaki adaylar ANALIZ.md 5.0'da.
 
 Rapor kuralları: `ExecutiveReport` JSON'a çevrilebilir kalmalı; ham satır ve audit örnekleri rapora girmez; veriden gelen her metin HTML'de `html.escape`, PDF'te `xml_escape` ile kaçırılır.
 
@@ -68,3 +70,11 @@ Zaman serisi kuralları (`core/timeseries.py`):
 - Tarih eksenlerinde Plotly'nin İngilizce ay adları yerine `tickformat="%m.%Y"` kullanılır.
 
 AutoML hedef sızıntısı (`AutoMLEngine._leakage_check`): model tabanı geçtiğinde iki imza aranır. Eksiklik imzası: bir sütunun yalnızca boş/dolu olması kazancın en az %50'sini açıklıyor (sonuç gerçekleştikten sonra doldurulan alan, ör. Olist `order_delivered_customer_date` → `order_status`). Baskınlık imzası: en önemli beş özellikten biri tek başına kazancın en az %90'ını sağlıyor. Sütun otomatik çıkarılmaz; uyarı arayüzde, özette ve önerilerde gösterilir ve şüphe varken özellikler "öncelikli izlenmeli" diye önerilmez.
+
+Dönem karşılaştırması (`core/drift.py`): trafik ışığı etki büyüklüğüne göre (PSI 0,10 / 0,25; eksik oranı 5 / 10 puan). p-değeri büyük örneklemde her farkı anlamlı gösterdiği için yalnızca bilgidir. Kimlik ve serbest metin sütunlarında dağılım karşılaştırılmaz, doluluk değişimi raporlanır. İkinci dosya `prepare_for_comparison` ile aynı yapısal hijyenden geçer.
+
+Çoklu tablo (`core/relations.py`): yalnızca iki birleştirme türü vardır; "eşleştir" (karşı anahtar benzersiz, `validate="many_to_one"`) ve "topla" (anahtar başına sayım/ortalama/toplam/en sık). Çoktan-çoğa ilişki önerilmez. Birleştirme satır sayısını asla değiştirmemeli; her adımın eşleşme oranı kaydedilir.
+
+Sohbet (`core/chat.py`): filtreler `QueryFilter` ile tipleri doğrulanarak maskeyle uygulanır; `eval`/`DataFrame.query` kullanılmaz. `explain()` eşdeğer pandas ve PostgreSQL kodunu yalnızca gösterim için üretir; bu metinler asla çalıştırılmaz. Anahtar kelime ararken kelime sınırı kullan ("toplam" içinde "top" geçer).
+
+Açıklanabilirlik (`core/explain.py`): model kara kutu (yalnızca `predict`/`predict_proba`), arka plan test bölmesinden en fazla 500 satır. Sızıntı şüphesi olan özellikler gizlenmez, uyarıyla gösterilir. AutoML tarih çiftleri için "sonraki − önceki (gün)" özelliği üretir (satır içi hesap, sızıntısız).

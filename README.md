@@ -12,6 +12,10 @@ Bir CSV veya Excel dosyası verin; veriyi temizlesin, en anlamlı grafikleri se�
 - **Her değişiklik kayıtlı.** Hangi sütuna ne yapıldığı ve kaç satırın etkilendiği audit log'da görünür.
 - **Modeller bir taban çizgisiyle kıyaslanır.** Hiçbir özelliğe bakmayan taban modeli geçemeyen sonuç, "tahmin edilemiyor" olarak açıkça bildirilir.
 - **Zaman serisi otopilotu.** Tarih sütunu bulununca trend, haftalık/yıllık döngü, olağan dışı dönemler ve %80 aralıklı tahmin; model, naif tahmine karşı geriye dönük test edilir ve geçemezse bunu söyler.
+- **Dönem karşılaştırması.** "2017 ile 2018 arasında ne değişti?" sorusuna şema, eksik oranı ve dağılım farkıyla trafik ışığı tablosu.
+- **Çoklu tablo.** `data/` içindeki tabloların ortak anahtarları bulunur; satır sayısını koruyan, onaylı bir birleştirme planıyla tek tabloya getirilir.
+- **Şeffaf sohbet.** "İstanbul için 2018'de aylık harcama" gibi koşullu sorular; her cevabın altında eşdeğer pandas ve SQL.
+- **Açıklanabilir model.** Kısmi bağımlılık grafikleri, Türkçe yorum ve what-if paneli; olası hedef sızıntısı uyarısı.
 - **Tek tıkla yönetici raporu.** Özet, öneriler, grafikler ve model sonucu HTML (etkileşimli) veya PDF olarak indirilir.
 - **API anahtarı olmadan da çalışır.** Anahtar yoksa kurallı yerel planlayıcı devreye girer.
 
@@ -57,8 +61,11 @@ core/planner.py      Gemini planlayıcı + kurallı fallback
 core/executor.py     Deterministik dönüşümler ve audit log
 core/autopilot.py    Orkestrasyon, grafik seçimi, hedef önerisi
 core/automl.py       Sızıntısız model karşılaştırması
-core/chat.py         Doğal dil sorusu → yapılandırılmış sorgu
+core/chat.py         Doğal dil sorusu → yapılandırılmış sorgu (+ pandas/SQL karşılığı)
 core/timeseries.py   Zaman serisi: trend, mevsimsellik, anomali, tahmin
+core/drift.py        Dönem karşılaştırması: şema, eksik oranı, PSI
+core/relations.py    Çoklu tablo: anahtar keşfi ve güvenli birleştirme
+core/explain.py      Kısmi bağımlılık ve what-if
 core/report.py       Yönetici raporu: HTML ve PDF
 ```
 
