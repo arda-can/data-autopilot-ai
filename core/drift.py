@@ -297,11 +297,19 @@ class DriftEngine:
     @staticmethod
     def _numeric(reference: pd.Series, current: pd.Series) -> tuple[float, float | None, str, str, str]:
         edges = np.unique(np.quantile(reference, np.linspace(0, 1, _BINS + 1)))
-        inner = edges[1:-1]
-        bins = len(inner) + 1
-        # Uçtaki dilimler açık uçlu: referans aralığının dışına düşen güncel değerler de sayılır.
-        ref_share = np.bincount(np.searchsorted(inner, reference, side="right"), minlength=bins) / len(reference)
-        cur_share = np.bincount(np.searchsorted(inner, current, side="right"), minlength=bins) / len(current)
+        low, high, inner = edges[0], edges[-1], edges[1:-1]
+
+        def shares(values: pd.Series) -> np.ndarray:
+            # Referans aralığının altı ve üstü ayrı dilimlerdir. Aksi halde sabit bir referansta (ör. tamamı 0)
+            # tüm değerler tek kovaya düşer ve 0 → 150 gibi büyük bir kayma PSI = 0 görünür.
+            numbers = values.to_numpy(dtype=float)
+            index = np.where(
+                numbers < low, 0,
+                np.where(numbers > high, len(inner) + 2, np.searchsorted(inner, numbers, side="right") + 1),
+            )
+            return np.bincount(index, minlength=len(inner) + 3) / len(numbers)
+
+        ref_share, cur_share = shares(reference), shares(current)
         psi = _psi(ref_share, cur_share)
         p_value = float(stats.ks_2samp(_sample(reference), _sample(current, 1)).pvalue)
         ref_q1, ref_median, ref_q3 = (float(value) for value in reference.quantile([0.25, 0.5, 0.75]))

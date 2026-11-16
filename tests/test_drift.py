@@ -144,3 +144,22 @@ def test_prepare_for_comparison_parses_like_the_autopilot() -> None:
     prepared = prepare_for_comparison(raw)
     assert pd.api.types.is_numeric_dtype(prepared["tutar"])
     assert pd.api.types.is_datetime64_any_dtype(prepared["tarih"])
+
+
+def test_constant_reference_shifted_current_is_red() -> None:
+    """Referans tamamen 0, güncel 100–200: dilimler tek kovaya düşse de değişim kırmızı olmalı."""
+    rng = np.random.default_rng(9)
+    reference = pd.DataFrame({"iade_tutarı": np.zeros(300)})
+    current = pd.DataFrame({"iade_tutarı": rng.uniform(100, 200, 300)})
+    report = DriftEngine().compare(reference, current).report
+    item = report.columns[0]
+    assert item.status == "kırmızı" and item.psi > 0.25
+    assert "belirgin bir değişim yok" not in report.summary
+    assert item.explanation.startswith("Medyan 0 → ")
+
+
+def test_values_beyond_reference_range_count_as_drift() -> None:
+    rng = np.random.default_rng(10)
+    reference = pd.DataFrame({"süre": rng.uniform(0, 10, 500)})
+    current = pd.DataFrame({"süre": np.concatenate([rng.uniform(0, 10, 300), rng.uniform(50, 60, 200)])})
+    assert DriftEngine().compare(reference, current).report.columns[0].status == "kırmızı"
