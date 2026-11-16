@@ -1,0 +1,149 @@
+"""Uçtan uca arayüz testleri (Streamlit AppTest): elle yapılan Olist denemelerinin tekrarlanabilir karşılığı.
+
+Veri, `AUTOPILOT_DATA_DIR` ile geçici bir klasöre üretilen küçük, Olist benzeri sentetik tablolardır:
+siparişler (iki yıl, teslim edilmeyenlerde teslim tarihi boş), müşteriler ve gecikmeyle düşen yorum puanları.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+from streamlit.testing.v1 import AppTest
+
+from tests.conftest import ROOT
+
+TIMEOUT = 240
+
+
+@pytest.fixture(scope="module")
+def data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    rng = np.random.default_rng(21)
+    folder = tmp_path_factory.mktemp("veri")
+    orders_count = 700
+    purchase = pd.Timestamp("2017-01-02") + pd.to_timedelta(np.sort(rng.integers(0, 720, orders_count)), unit="D")
+    status = rng.choice(["delivered", "shipped", "canceled"], orders_count, p=[0.9, 0.06, 0.04])
+    estimated = purchase + pd.Timedelta(days=15)
+    delay = rng.integers(-8, 12, orders_count)
+    delivered = pd.Series(estimated + pd.to_timedelta(delay, unit="D"))
+    delivered[status != "delivered"] = pd.NaT
+    orders = pd.DataFrame({
+        "order_id": [f"o{index:05d}" for index in range(orders_count)],
+        "customer_id": [f"c{index % 500:04d}" for index in range(orders_count)],
+        "order_status": status,
+        "order_purchase_timestamp": purchase.strftime("%Y-%m-%d %H:%M:%S"),
+        "order_estimated_delivery_date": estimated.strftime("%Y-%m-%d"),
+        "order_delivered_customer_date": delivered.dt.strftime("%Y-%m-%d"),
+        "price": np.round(rng.uniform(20, 200, orders_count), 2),
+    })
+    customers = pd.DataFrame({
+        "customer_id": [f"c{index:04d}" for index in range(500)],
+        "customer_city": rng.choice(["sao paulo", "rio", "curitiba", "recife"], 500),
+    })
+    score = np.clip(np.round(4.6 - 0.25 * np.clip(delay, 0, None) + rng.normal(0, 0.5, orders_count)), 1, 5)
+    reviews = pd.DataFrame({"review_id": [f"r{index}" for index in range(orders_count)],
+                            "order_id": orders["order_id"], "review_score": score.astype(int)})
+    # Olist'teki gibi bazı siparişlerin ikinci yorumu var: ilişki 1-N olur ve "topla" önerilir.
+    extra = reviews.head(20).assign(review_id=lambda frame: frame["review_id"] + "b")
+    reviews = pd.concat([reviews, extra], ignore_index=True)
+    orders.to_csv(folder / "olist_orders_dataset.csv", index=False)
+    customers.to_csv(folder / "olist_customers_dataset.csv", index=False)
+    reviews.to_csv(folder / "olist_order_reviews_dataset.csv", index=False)
+    return folder
+
+
+@pytest.fixture
+def app(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> AppTest:
+    monkeypatch.setenv("AUTOPILOT_DATA_DIR", str(data_dir))
+    application = AppTest.from_file(str(ROOT / "app.py"), default_timeout=TIMEOUT)
+    application.run()
+    return application
+
+
+def _ok(application: AppTest) -> None:
+    assert not application.exception, [str(item.value)[:300] for item in application.exception]
+
+
+def test_single_table_flow_timeseries_drift_chat_and_report(app: AppTest) -> None:
+    app.sidebar.selectbox[0].select("olist_orders_dataset.csv").run()
+    _ok(app)
+    headers = [item.value for item in app.header]
+    assert "📈 Zaman Serisi Otopilotu" in headers and "🔀 Dönem Karşılaştırması" in headers
+
+    app.selectbox(key="ts_frequency").select("Haftalık").run()
+    _ok(app)
+    assert ("Frekans", "Haftalık") in [(item.label, item.value) for item in app.metric]
+
+    assert app.selectbox(key="drift_reference_year").value == 2017
+    app.button(key="drift_button").click().run()
+    _ok(app)
+    assert any(item.value.startswith("“2017” ile “2018” arasında") for item in app.markdown)
+
+    app.text_input(key="autopilot_chat_question").set_value("canceled siparişlerin aylık sayısı").run()
+    app.button(key="autopilot_chat_button").click().run()
+    _ok(app)
+    assert any("Filtre: order_status == canceled" in item.value for item in app.markdown)
+    assert any("SELECT DATE_TRUNC('month'" in item.value for item in app.code)
+
+    app.button(key="report_button").click().run()
+    _ok(app)
+    page = app.session_state["report_files"]["html"].decode("utf-8")
+    for heading in ("Zaman Serisi", "Dönem Karşılaştırması", "Tahmin Modeli", "Uygulanan İşlemler"):
+        assert f"<h2>{heading}</h2>" in page
+    assert app.session_state["report_files"]["pdf"].startswith(b"%PDF")
+
+
+def test_prediction_time_settings_and_what_if(app: AppTest) -> None:
+    app.sidebar.selectbox[0].select("olist_orders_dataset.csv").run()
+    _ok(app)
+    app.selectbox(key="autopilot_target").select("order_status").run()
+    _ok(app)
+    assert any("olası hedef sızıntısı" in item.value.lower() for item in app.warning)
+    app.multiselect(key="automl_known_order_status").set_value(["order_delivered_customer_date"]).run()
+    _ok(app)
+    assert any("tahmin anında bilindiği onaylanan: order_delivered_customer_date" in item.value for item in app.caption)
+    assert not any(item.value.startswith("Olası hedef sızıntısı") for item in app.warning)
+
+    app.selectbox(key="automl_time_order_status").select("order_purchase_timestamp").run()
+    _ok(app)
+    assert any(item.value.startswith("Değerlendirme: zamana göre (order_purchase_timestamp") for item in app.caption)
+
+    submit = next(button for button in app.button if button.label == "Tahmin et")
+    submit.click().run()
+    _ok(app)
+    assert any(item.value.startswith("Tahmin: “") for item in app.success)
+
+
+def test_multi_table_join_flow(app: AppTest) -> None:
+    app.sidebar.radio(key="work_mode").set_value("Çoklu tablo (data/ klasörü)").run()
+    _ok(app)
+    assert app.selectbox(key="join_base").value == "orders"
+    labels = [item.label for item in app.checkbox]
+    assert any(label.startswith("customers — eşleştir") for label in labels)
+    assert any(label.startswith("order_reviews — topla") for label in labels)
+    app.button(key="join_button").click().run()
+    _ok(app)
+    assert ("Satır Değişimi", "700 → 700") in [(item.label, item.value) for item in app.metric]
+    assert app.selectbox(key="autopilot_target").value == "order_reviews_review_score_ort"
+    app.button(key="report_button").click().run()
+    _ok(app)
+    page = app.session_state["report_files"]["html"].decode("utf-8")
+    assert "<h2>Veri Birleştirme</h2>" in page and "Model Neden Böyle Tahmin Ediyor?" in page
+
+
+def test_changed_file_content_refreshes_results(data_dir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Önbellek anahtarı içerikle değişir: aynı ada yeni içerik yazılınca eski sonuçlar gösterilmez."""
+    path = tmp_path / "tablo.csv"
+    pd.DataFrame({"şehir": ["A", "B"] * 30, "tutar": range(60)}).to_csv(path, index=False)
+    monkeypatch.setenv("AUTOPILOT_DATA_DIR", str(tmp_path))
+    application = AppTest.from_file(str(ROOT / "app.py"), default_timeout=TIMEOUT)
+    application.run()
+    application.sidebar.selectbox[0].select("tablo.csv").run()
+    _ok(application)
+    assert ("Satır Değişimi", "60 → 60") in [(item.label, item.value) for item in application.metric]
+    pd.DataFrame({"şehir": ["A", "B"] * 45, "tutar": range(90)}).to_csv(path, index=False)
+    application.run()
+    _ok(application)
+    assert ("Satır Değişimi", "90 → 90") in [(item.label, item.value) for item in application.metric]
