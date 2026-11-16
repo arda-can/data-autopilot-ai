@@ -145,3 +145,21 @@ def test_category_value_needs_word_boundaries(deliveries: pd.DataFrame) -> None:
     assert [(item.column, item.value) for item in query.filters] == [("durum", "teslim")]
     _, _, query, _ = _ask(deliveries, "teslimat_süresi ortalaması nedir")
     assert query.filters == []  # "teslimat" içindeki "teslim" bir filtre değildir
+
+
+def test_filtered_measure_can_be_the_target(customers: pd.DataFrame) -> None:
+    table, _, query, _ = _ask(customers, "Yaşı 40'tan büyük müşterilerin ortalama yaşı")
+    assert [(item.column, item.operator) for item in query.filters] == [("Yaş", ">")]
+    assert query.target_col == "Yaş" and query.group_col is None
+    assert table["Değer"].iloc[0] == pytest.approx(customers.loc[customers["Yaş"] > 40, "Yaş"].mean())
+
+
+def test_filter_column_mention_is_not_mistaken_for_target(customers: pd.DataFrame) -> None:
+    _, _, query, _ = _ask(customers, "Yaşı 40'tan büyük müşterilerin ortalama harcaması")
+    assert query.target_col == "Harcama"
+
+
+def test_aggregate_without_grouping_cue_is_overall(customers: pd.DataFrame) -> None:
+    table, _, query, code = _ask(customers, "ortalama harcama nedir?")
+    assert query.group_col is None and table["Değer"].iloc[0] == pytest.approx(customers["Harcama"].mean())
+    assert code.sql == 'SELECT AVG("Harcama") AS deger\nFROM veri;'

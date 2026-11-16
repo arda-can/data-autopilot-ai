@@ -167,7 +167,9 @@ class DataChatEngine:
         filter_columns = {item.column for item in filters}
         single_value_columns = {item.column for item in filters if item.operator == "=="}
 
-        target = self._find_column(remaining, [c for c in numeric if c not in filter_columns], True, frame)
+        # Filtrenin kullandığı sütun adı `remaining` metninden çıkarıldı; ad yeniden geçiyorsa ("yaşı 40'tan büyük
+        # müşterilerin ortalama yaşı") aynı sütun hedef olabilir.
+        target = self._find_column(remaining, numeric, True, frame)
         group = self._find_column(remaining, categorical) or None
         limit_match = re.search(r"\b(\d{1,3})\b", remaining)
         limit = max(1, min(int(limit_match.group(1)), 100)) if limit_match else 10
@@ -214,7 +216,13 @@ class DataChatEngine:
         if not target and operation not in ("time_trend", "correlation"):
             choices = [c for c in numeric if c not in filter_columns] or numeric
             target = choices[0] if choices else columns[0]
-        if not group and operation in ("groupby_agg", "value_counts", "top_n"):
+        wants_grouping = any(word in lowered for word in ("göre", "bazında", "başına", "kırılım", "her "))
+        multi_value = [item.column for item in filters if item.operator == "in"]
+        if not group and operation == "groupby_agg" and multi_value:
+            group = multi_value[0]  # "Ankara ve İzmir için toplam harcama": değerler karşılaştırılır
+        elif not group and operation == "groupby_agg" and not wants_grouping:
+            group = None  # gruplama istenmediyse ("ortalama yaşı nedir?") genel değer hesaplanır
+        elif not group and operation in ("groupby_agg", "value_counts", "top_n"):
             # Grup belirtilmemişse: kimlik olmayan, tek değere filtrelenmemiş ilk kategorik sütun.
             group = next(
                 (c for c in categorical
@@ -287,6 +295,10 @@ class DataChatEngine:
                     continue
                 filters.append(QueryFilter(column=column, operator=operator, value=str(float(value))))
                 consumed.append(match.span())
+                # Karşılaştırmanın kullandığı sütun adı da tüketilir; böylece hedef aranırken sayılmaz.
+                mention = lowered.rfind(column.replace("İ", "i").lower(), 0, match.start())
+                if mention >= 0:
+                    consumed.append((mention, mention + len(column)))
 
         # 3. Kategori değeri: "İstanbul için", "delivered siparişler". Değer, kelime sınırlarıyla aranır
         # ("teslimat" içinde "teslim" geçmez); uzun eşleşme önce gelir ve çakışan kısa eşleşmeler atlanır
