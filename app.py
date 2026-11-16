@@ -33,6 +33,24 @@ def _model_dict(value: BaseModel) -> dict:
     return value.model_dump()
 
 
+def _load_dataset(load, signature: str, name: str) -> None:
+    """Veriyi yükler; okuma hatasında önceki veri korunur ve Türkçe hata gösterilir (aynı dosya tekrar denenmez)."""
+    if signature in (st.session_state.data_signature, st.session_state.get("failed_signature")):
+        return
+    try:
+        frame = load()
+    except ValueError as exc:
+        st.session_state.failed_signature = signature
+        st.session_state.load_error = str(exc)
+        return
+    st.session_state.failed_signature = None
+    st.session_state.load_error = None
+    st.session_state.dataframe = frame
+    st.session_state.data_signature = signature
+    st.session_state.data_name = name
+    st.session_state.autopilot_result = None
+
+
 @st.cache_resource(show_spinner="Tablolar okunuyor ve ilişkiler aranıyor...")
 def _discover_tables(signature: tuple[tuple[str, int], ...]) -> tuple:
     """`data/` klasöründeki tabloları bir kez okur; dosyalar değişince imza değişir ve yeniden okunur."""
@@ -66,32 +84,23 @@ with st.sidebar:
     selected, uploaded = "-- Seçin --", None
     if work_mode == "Tek tablo":
         selected = st.selectbox("Yerel CSV seçin", ["-- Seçin --", *[p.name for p in files]])
-        uploaded = st.file_uploader("CSV veya Excel yükleyin", type=["csv", "xlsx", "xls"])
+        uploaded = st.file_uploader("CSV veya Excel (.xlsx) yükleyin", type=["csv", "xlsx"])
     else:
         st.caption("Tablolar arası ilişkiler ana ekranda keşfedilir; onayladığınız plan tek tabloya birleştirilir.")
     if work_mode == "Tek tablo" and st.button("Örnek Kirli Türkçe Veri Üret ve Yükle", width="stretch"):
         path = generate_sample_dirty_data()
-        st.session_state.dataframe = read_local_csv(path)
-        st.session_state.data_signature = f"sample:{path.stat().st_mtime_ns}"
-        st.session_state.data_name = path.name
-        st.session_state.autopilot_result = None
+        _load_dataset(lambda: read_local_csv(path), f"sample:{path.stat().st_mtime_ns}", path.name)
         st.rerun()
 
 if uploaded is not None:
-    source_signature = f"upload:{uploaded.name}:{uploaded.size}"
-    if st.session_state.data_signature != source_signature:
-        st.session_state.dataframe = read_tabular_file(uploaded, uploaded.name)
-        st.session_state.data_signature = source_signature
-        st.session_state.data_name = uploaded.name
-        st.session_state.autopilot_result = None
+    _load_dataset(
+        lambda: read_tabular_file(uploaded, uploaded.name), f"upload:{uploaded.name}:{uploaded.size}", uploaded.name
+    )
 elif selected != "-- Seçin --":
     path = next(path for path in files if path.name == selected)
-    source_signature = f"local:{path}:{path.stat().st_mtime_ns}"
-    if st.session_state.data_signature != source_signature:
-        st.session_state.dataframe = read_local_csv(path)
-        st.session_state.data_signature = source_signature
-        st.session_state.data_name = path.name
-        st.session_state.autopilot_result = None
+    _load_dataset(lambda: read_local_csv(path), f"local:{path}:{path.stat().st_mtime_ns}", path.name)
+if st.session_state.get("load_error"):
+    st.error(f"Dosya yüklenemedi: {st.session_state.load_error}")
 
 if work_mode != "Tek tablo":
     joined_active = str(st.session_state.data_signature or "").startswith("join:")
