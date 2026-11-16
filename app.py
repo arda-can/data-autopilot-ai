@@ -22,6 +22,7 @@ from core.ingestion import (
 from core.formatting import decimal_tr, display_frame, integer_tr
 from core.report import build_report, render_html, render_pdf
 from core.timeseries import TimeSeriesEngine, date_columns, value_columns
+from core.drift import DriftEngine, prepare_for_comparison, split_by_date, split_by_years
 
 
 def _model_dict(value: BaseModel) -> dict:
@@ -222,6 +223,109 @@ if ts_dates:
             )
         for note in ts_summary.notes:
             st.caption(f"Not: {note}")
+
+st.header("🔀 Dönem Karşılaştırması")
+st.caption(
+    "İki dönem ya da iki dosya arasında şema, eksik oranı ve dağılım farkı. "
+    "Trafik ışığı etki büyüklüğüne (PSI) göre verilir; ham satırlar karşılaştırılmaz."
+)
+drift_modes = (["İki yıl", "Kesim tarihi"] if ts_dates else []) + ["İkinci dosya"]
+drift_mode = st.radio("Karşılaştırma türü", drift_modes, horizontal=True, key="drift_mode")
+drift_request: tuple | None = None
+drift_upload = None
+if drift_mode in ("İki yıl", "Kesim tarihi"):
+    drift_date = st.selectbox("Tarih sütunu", ts_dates, key="drift_date")
+    drift_dates = cleaned[drift_date].dropna()
+    if drift_mode == "İki yıl":
+        drift_years = sorted(int(year) for year in drift_dates.dt.year.unique())
+        if len(drift_years) < 2:
+            st.info("Bu tarih sütununda iki farklı yıl yok; kesim tarihiyle karşılaştırın.")
+        else:
+            reference_ui, current_ui = st.columns(2)
+            reference_year = reference_ui.selectbox(
+                "Referans yıl", drift_years, index=len(drift_years) - 2, key="drift_reference_year"
+            )
+            current_year = current_ui.selectbox(
+                "Güncel yıl", drift_years, index=len(drift_years) - 1, key="drift_current_year"
+            )
+            drift_request = ("years", drift_date, reference_year, current_year)
+    else:
+        ordered_dates = drift_dates.sort_values()
+        drift_cut = st.date_input(
+            "Kesim tarihi (bu tarih ve sonrası güncel dönem)",
+            value=ordered_dates.iloc[len(ordered_dates) // 2].date(),
+            min_value=ordered_dates.iloc[0].date(),
+            max_value=ordered_dates.iloc[-1].date(),
+            key="drift_cut",
+        )
+        drift_request = ("cut", drift_date, str(drift_cut))
+else:
+    drift_upload = st.file_uploader(
+        "Karşılaştırılacak dosya (CSV veya Excel)", type=["csv", "xlsx"], key="drift_file"
+    )
+    if drift_upload is not None:
+        drift_request = ("file", drift_upload.name, drift_upload.size)
+
+if drift_request is not None and st.button("Karşılaştır", key="drift_button"):
+    with st.spinner("Dönemler karşılaştırılıyor..."):
+        try:
+            if drift_request[0] == "years":
+                drift_parts = split_by_years(cleaned, drift_request[1], drift_request[2], drift_request[3])
+            elif drift_request[0] == "cut":
+                drift_parts = split_by_date(cleaned, drift_request[1], drift_request[2])
+            else:
+                # İki dosya da aynı yapısal hijyenden geçer; istatistiksel dönüşüm yapılmaz.
+                drift_parts = (
+                    prepare_for_comparison(st.session_state.dataframe),
+                    prepare_for_comparison(read_tabular_file(drift_upload, drift_upload.name)),
+                    st.session_state.data_name,
+                    drift_upload.name,
+                )
+            drift_outcome = DriftEngine().compare(*drift_parts)
+        except ValueError as exc:
+            drift_outcome = f"Karşılaştırma yapılamadı: {exc}"
+        st.session_state.drift_result = (st.session_state.data_signature, drift_request, drift_outcome)
+
+drift_stored = st.session_state.get("drift_result")
+if drift_stored and drift_stored[0] == st.session_state.data_signature and drift_stored[1] == drift_request:
+    drift_outcome = drift_stored[2]
+    if isinstance(drift_outcome, str):
+        st.warning(drift_outcome)
+    else:
+        drift_report = drift_outcome.report
+        st.write(drift_report.summary)
+        light_columns = st.columns(3)
+        light_columns[0].metric("🔴 Kırmızı", drift_report.counts["kırmızı"])
+        light_columns[1].metric("🟡 Sarı", drift_report.counts["sarı"])
+        light_columns[2].metric("🟢 Yeşil", drift_report.counts["yeşil"])
+        for change in drift_report.schema_changes:
+            st.warning(f"Şema: “{change.column}” {change.change} ({change.detail})")
+        if drift_report.columns:
+            lights = {"kırmızı": "🔴", "sarı": "🟡", "yeşil": "🟢"}
+            st.dataframe(
+                display_frame(pd.DataFrame([
+                    {
+                        "Durum": f"{lights[item.status]} {item.status}", "Sütun": item.column, "Tür": item.kind,
+                        "PSI": item.psi, drift_report.reference_label: item.reference_summary,
+                        drift_report.current_label: item.current_summary, "Açıklama": item.explanation,
+                        "Test": item.test, "p-değeri": item.p_value,
+                    }
+                    for item in drift_report.columns
+                ])),
+                width="stretch",
+                hide_index=True,
+            )
+        if drift_outcome.figure is not None:
+            st.plotly_chart(drift_outcome.figure, width="stretch")
+        if drift_outcome.detail_figures:
+            with st.expander("Değişen sütunların dağılımları"):
+                for drift_figure in drift_outcome.detail_figures.values():
+                    st.plotly_chart(drift_figure, width="stretch")
+        if drift_report.skipped:
+            with st.expander(f"Karşılaştırılmayan sütunlar ({len(drift_report.skipped)})"):
+                for note in drift_report.skipped:
+                    st.caption(note)
+        st.caption(drift_report.method_note)
 
 st.header("🤖 Otonom Makine Öğrenmesi (AutoML) Sonucu")
 target_options = [str(column) for column in cleaned.columns]
