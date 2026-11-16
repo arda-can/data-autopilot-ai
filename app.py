@@ -23,6 +23,7 @@ from core.formatting import decimal_tr, display_frame, integer_tr
 from core.report import build_report, render_html, render_pdf
 from core.timeseries import TimeSeriesEngine, date_columns, value_columns
 from core.drift import DriftEngine, prepare_for_comparison, split_by_date, split_by_years
+from core.explain import PDP_NOTE, ModelExplainer
 from core.relations import (
     JoinPlan, RelationFinder, apply_plan, default_base, load_tables, prune_plan, relation_figure, suggest_plan,
 )
@@ -471,6 +472,60 @@ if automl is not None:
     st.dataframe(display_frame(automl.leaderboard), width="stretch", hide_index=True)
     st.subheader("Özellik Önemi")
     st.plotly_chart(automl.figure, width="stretch")
+    if automl.model is not None and automl.background is not None:
+        st.subheader("Model neden böyle tahmin ediyor? (Kısmi bağımlılık)")
+        explain_cache = st.session_state.setdefault("explain_cache", {})
+        explain_key = (st.session_state.data_signature, selected_target, automl.best_model)
+        if explain_key not in explain_cache:
+            try:
+                explain_cache[explain_key] = ModelExplainer().explain(automl)
+            except ValueError as exc:
+                explain_cache[explain_key] = f"Açıklama üretilemedi: {exc}"
+        explanation = explain_cache[explain_key]
+        if isinstance(explanation, str):
+            st.info(explanation)
+        else:
+            st.caption(PDP_NOTE)
+            for curve, curve_figure in zip(explanation.curves, explanation.figures):
+                st.plotly_chart(curve_figure, width="stretch")
+                (st.warning if curve.interpretation.startswith("Uyarı") else st.write)(curve.interpretation)
+            for note in explanation.skipped:
+                st.caption(note)
+            if explanation.what_if_features:
+                st.subheader("What-if: değerleri değiştirip tahmini görün")
+                st.caption(
+                    "Diğer özellikler tipik değerlerinde (sayısalda medyan, kategoride en sık değer) sabit tutulur."
+                )
+                with st.form(key=f"what_if_{selected_target}"):
+                    what_if_values = {}
+                    for feature in explanation.what_if_features:
+                        if feature.kind == "sayısal":
+                            span = feature.maximum - feature.minimum
+                            what_if_values[feature.name] = st.slider(
+                                feature.name, min_value=float(feature.minimum), max_value=float(feature.maximum),
+                                value=float(min(max(feature.default, feature.minimum), feature.maximum)),
+                                step=float(span / 100) if span > 0 else 1.0,
+                            )
+                        else:
+                            what_if_values[feature.name] = st.selectbox(
+                                feature.name, feature.options, index=feature.options.index(str(feature.default)),
+                            )
+                    submitted = st.form_submit_button("Tahmin et")
+                if submitted:
+                    try:
+                        prediction = ModelExplainer().what_if(automl, what_if_values)
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success(prediction.text)
+                        if prediction.probabilities:
+                            st.dataframe(
+                                display_frame(pd.DataFrame(
+                                    [{"Sınıf": label, "Olasılık": value}
+                                     for label, value in prediction.probabilities.items()]
+                                )),
+                                width="stretch", hide_index=True,
+                            )
 else:
     st.info(automl_error or result.automl_message or "Uygun hedef sütun bulunamadığı için AutoML atlandı.")
 

@@ -41,6 +41,9 @@ class AutoMLResult:
     verdict: str = ""
     leakage_suspects: list[str] = field(default_factory=list)
     leakage_warnings: list[str] = field(default_factory=list)
+    target: str = ""
+    model: Any = None  # en iyi, eğitilmiş pipeline (açıklama ve what-if için)
+    background: pd.DataFrame | None = None  # test bölmesinden en fazla 500 satır (hazırlanmış özellikler)
 
 
 # Tek bir özellik, modelin taban üzerindeki kazancının bu kadarını tek başına sağlıyorsa sızıntı şüphesi.
@@ -153,7 +156,9 @@ class AutoMLEngine:
             problem_type, leaderboard, best_model, importance, localize_figure(figure),
             metric=sort_column, baseline_model=baseline_name, baseline_score=baseline_score,
             best_score=best_score, beats_baseline=beats_baseline, verdict=verdict,
-            leakage_suspects=suspects, leakage_warnings=warnings_text,
+            leakage_suspects=suspects, leakage_warnings=warnings_text, target=str(target_col),
+            model=fitted[best_model],
+            background=X_test.sample(min(500, len(X_test)), random_state=self.random_state),
         )
 
     def _leakage_check(
