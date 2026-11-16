@@ -288,24 +288,40 @@ class DataChatEngine:
                 filters.append(QueryFilter(column=column, operator=operator, value=str(float(value))))
                 consumed.append(match.span())
 
-        # 3. Kategori değeri: "İstanbul için", "delivered siparişler"
-        normalized_question = self._normalize(question)
+        # 3. Kategori değeri: "İstanbul için", "delivered siparişler". Değer, kelime sınırlarıyla aranır
+        # ("teslimat" içinde "teslim" geçmez); uzun eşleşme önce gelir ve çakışan kısa eşleşmeler atlanır
+        # ("teslim edilmedi" sorusu "teslim" kayıtlarını da almaz).
+        letter = "0-9a-zçğıöşüâîû"
+        candidates: list[tuple[int, int, int, str, str]] = []
         for column in categorical:
             series = frame[column]
             if is_identifier_column(series, column) or series.nunique() > _MAX_FILTER_CATEGORIES:
                 continue
-            matched = [
-                str(value) for value in series.dropna().unique()
-                if len(self._normalize(str(value))) >= 4 and self._normalize(str(value)) in normalized_question
-            ]
-            if len(matched) == 1:
-                filters.append(QueryFilter(column=column, operator="==", value=matched[0]))
-            elif matched:
-                filters.append(QueryFilter(column=column, operator="in", values=sorted(matched)))
-            for value in matched:
-                position = lowered.find(value.replace("İ", "i").lower())
-                if position >= 0:
-                    consumed.append((position, position + len(value)))
+            for value in series.dropna().unique():
+                text = str(value)
+                tokens = [token for token in re.split(r"[\s_\-]+", text.replace("İ", "i").lower()) if token]
+                if not tokens or len("".join(tokens)) < 4:
+                    continue
+                pattern = rf"(?<![{letter}])" + r"[\s_\-]+".join(map(re.escape, tokens)) + rf"(?![{letter}])"
+                for match in re.finditer(pattern, lowered):
+                    candidates.append((match.end() - match.start(), match.start(), match.end(), column, text))
+        taken = list(consumed)
+        matched: dict[str, list[str]] = {}
+        for _, start, end, column, text in sorted(candidates, key=lambda item: (-item[0], item[1])):
+            if any(start < other_end and other_start < end for other_start, other_end in taken):
+                continue
+            taken.append((start, end))
+            consumed.append((start, end))
+            if text not in matched.setdefault(column, []):
+                matched[column].append(text)
+        for column in categorical:
+            values = matched.get(column)
+            if not values:
+                continue
+            if len(values) == 1:
+                filters.append(QueryFilter(column=column, operator="==", value=values[0]))
+            else:
+                filters.append(QueryFilter(column=column, operator="in", values=sorted(values)))
         return filters, consumed
 
     @staticmethod

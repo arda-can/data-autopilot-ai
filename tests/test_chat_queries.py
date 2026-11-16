@@ -120,3 +120,28 @@ def test_plain_questions_keep_previous_behaviour(customers: pd.DataFrame) -> Non
     assert query.filters == [] and (query.operation, query.group_col) == ("groupby_agg", "Şehir")
     _, _, query, code = _ask(customers, "en yüksek 5 harcama")
     assert query.operation == "top_n" and query.limit == 5 and code.sql.endswith("LIMIT 5;")
+
+
+@pytest.fixture(scope="module")
+def deliveries() -> pd.DataFrame:
+    rng = np.random.default_rng(4)
+    return pd.DataFrame({
+        "durum": rng.choice(["teslim", "teslim edilmedi", "iade"], 300, p=[0.6, 0.3, 0.1]),
+        "tutar": rng.uniform(10, 100, 300),
+        "teslimat_süresi": rng.integers(1, 15, 300),
+    })
+
+
+def test_longer_category_value_wins_over_its_prefix(deliveries: pd.DataFrame) -> None:
+    table, _, query, code = _ask(deliveries, "teslim edilmedi için ortalama tutar")
+    assert [(item.column, item.operator, item.value) for item in query.filters] == [("durum", "==", "teslim edilmedi")]
+    expected = deliveries.loc[deliveries["durum"] == "teslim edilmedi", "tutar"].mean()
+    assert table["Değer"].iloc[0] == pytest.approx(expected)
+    assert code.rows_used == int((deliveries["durum"] == "teslim edilmedi").sum())
+
+
+def test_category_value_needs_word_boundaries(deliveries: pd.DataFrame) -> None:
+    _, _, query, _ = _ask(deliveries, "teslim için ortalama tutar")
+    assert [(item.column, item.value) for item in query.filters] == [("durum", "teslim")]
+    _, _, query, _ = _ask(deliveries, "teslimat_süresi ortalaması nedir")
+    assert query.filters == []  # "teslimat" içindeki "teslim" bir filtre değildir
