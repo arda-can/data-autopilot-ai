@@ -531,14 +531,28 @@ with st.expander("Veriyle sohbet et"):
         placeholder="Örn: Şehirlere göre ortalama harcama nedir?",
         key="autopilot_chat_question",
     )
+    st.caption(
+        "Koşul ve zaman kırılımı da sorulabilir: “İstanbul için ortalama harcama”, "
+        "“2018'de aylık sipariş sayısı”, “yaşı 40'tan büyük müşterilerin şehirlere göre harcaması”."
+    )
     if st.button("Soruyu Analiz Et", key="autopilot_chat_button"):
         try:
-            chat_result, summary, figure, query = DataChatEngine(api_key).answer(
-                cleaned, question, result.metadata
-            )
+            chat_engine = DataChatEngine(api_key)
+            chat_result, summary, figure, query = chat_engine.answer(cleaned, question, result.metadata)
             st.write(f"**{summary}**")
             st.caption(f"Yapılandırılmış işlem: `{query.operation}`")
             st.plotly_chart(figure, width="stretch")
             st.dataframe(display_frame(chat_result), width="stretch")
+            query_code = chat_engine.explain(cleaned, query)
+            st.markdown("**Bu cevap nasıl hesaplandı?**")
+            st.caption(
+                f"{integer_tr(query_code.rows_used)} kayıt kullanıldı"
+                + (f"; filtre: {'; '.join(query_code.filters)}." if query_code.filters else ".")
+                + " Kod yalnızca gösterim içindir: uygulama bu metinleri çalıştırmaz, aynı hesabı "
+                "doğrulanmış işlemlerle yapar."
+            )
+            pandas_tab, sql_tab = st.tabs(["pandas", "SQL (PostgreSQL)"])
+            pandas_tab.code(query_code.pandas, language="python")
+            sql_tab.code(query_code.sql, language="sql")
         except (ValueError, TypeError) as exc:
             st.error(str(exc))
