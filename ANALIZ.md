@@ -18,7 +18,7 @@ Bu belge sprint öncesi durumu anlatır; aşağıdaki maddeler o tarihten sonra 
 | O5 — baştaki sıfır kaybı | ◐ Kısmen | Metin olarak okunan kodlar artık korunuyor; okuma sırasında sayıya dönüşenler hâlâ açık |
 | D3 — ölü kod | ◐ Kısmen | `_numeric_pattern` kaldırıldı |
 | Yeni bulgu | ✅ Düzeltildi | `remove_duplicates`, metin sütununda NaN olan mükerrer satırlarda `TypeError` veriyordu |
-| Y6 — yanıltıcı AutoML sonuçları | ◐ Kısmen | Taban model, Türkçe hüküm, önbellek ve örneklem eklendi; çapraz doğrulama ve hedef sızıntısı uyarısı açık |
+| Y6 — yanıltıcı AutoML sonuçları | ◐ Kısmen | Taban model, Türkçe hüküm, önbellek, örneklem ve olası hedef sızıntısı uyarısı (eksiklik ve baskınlık imzası) eklendi; çapraz doğrulama açık |
 | O7 — okunaksız grafikler | ◐ Kısmen | Renk kırılımı yalnızca en fazla 12 sınıflı kategoriyle yapılıyor; sabit `k=3` ve zaman grafiği açık |
 | 4.1 — zaman serisi otopilotu | ✅ Eklendi | `core/timeseries.py`: otomatik frekans, kenar ve kesim temizliği, STL, anomaliler, AICc ile seçilen ETS, mevsimsel naif tabanla 3 pencereli geriye dönük test, %80 aralıklı tahmin; arayüz ve rapor bölümü |
 | 4.2 — yönetici raporu | ✅ Eklendi | `core/report.py`: HTML (etkileşimli grafikler) ve PDF; Word kademesi açık |

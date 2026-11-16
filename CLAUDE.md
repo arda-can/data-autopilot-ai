@@ -46,6 +46,7 @@ Bunların her biri gerçek bir hatadan doğdu (ayrıntı: `ANALIZ.md`).
 
 - `AuditLog` alanı `affected_count`; `.cursorrules` `rows_affected` diyor. Örnekler etkilenen satırlardan değil ilk 5 satırdan alınıyor (ANALIZ.md O2).
 - LLM planı için korkuluk ve hata görünürlüğü eksik; Gemini yolu gerçek anahtarla test edilmedi (ANALIZ.md Y4).
+- AutoML'de çapraz doğrulama yok (tek 80/20 bölme).
 
 ## Yol haritası
 
@@ -60,8 +61,10 @@ Sayı ve grafik sunumu `core/formatting.py` üzerinden Türkçe biçimlenir (`de
 Zaman serisi kuralları (`core/timeseries.py`):
 
 - Frekans otomatik seçilir: aylık → haftalık → günlük sırasıyla, mevsimselliği (iki tam döngü + tahmin ufku) ölçülebilen ve dönemlerinin en fazla %20'si boş olan ilk frekans. Hiçbiri yoksa mevsimsellik olmadan en kaba yoğun frekans.
-- Kenar dönemler sessizce silinmez: tam kapsanmayan ilk/son hafta-ay, tipik değerin %10'unun altındaki seyrek başlangıç/bitiş ve sağdan kesilen son dönemler (önceki medyanın yarısının altı, günlükte en fazla 7) dışarıda bırakılır ve her biri `notes` içinde okura yazılır.
+- Kenar dönemler sessizce silinmez ve güncel veri atılmaz: seyrek dönemler (tipik değerin %10'u altı) seriyi ancak uzun bir boşlukla (günlükte en az 14 gün) bölümlere ayırır; en az 12 dönemlik **en güncel** bölüm seçilir, daha kısa boşluklar 0 sayılıp not edilir. Tam kapsanmayan ilk/son hafta-ay kendi takvim uzunluğuyla ölçülür (Şubat 28 gün). Sağdan kesilme kontrolü son dönemi aynı mevsimsel fazdaki önceki dönemlerle kıyaslar (cumartesi önceki cumartesilerle); olağan hafta sonu düşüşü kesim sayılmaz. Atılan her şey `notes` içinde yazılır.
 - Model seçimi her eğitim penceresinde yalnızca eğitim verisiyle AICc üzerinden yapılır (sönümlü / doğrusal / trendsiz ETS); geriye dönük test penceresine bakılmaz. Model mevsimsel naif tahmini %5 geçemezse hüküm bunu açıkça söyler; tahmin yine gösterilir.
 - Mevsimsellik gücü olağan dışı dönemler (|z| ≥ 4) hariç ölçülür; tek bir kampanya günü haftalık döngüyü gizlememeli.
 - statsmodels 0.15'te `ETSModel` numpy girdiyle `get_prediction` çağrısında çöküyor; modele tamsayı indeksli `pd.Series` verilir.
 - Tarih eksenlerinde Plotly'nin İngilizce ay adları yerine `tickformat="%m.%Y"` kullanılır.
+
+AutoML hedef sızıntısı (`AutoMLEngine._leakage_check`): model tabanı geçtiğinde iki imza aranır. Eksiklik imzası: bir sütunun yalnızca boş/dolu olması kazancın en az %50'sini açıklıyor (sonuç gerçekleştikten sonra doldurulan alan, ör. Olist `order_delivered_customer_date` → `order_status`). Baskınlık imzası: en önemli beş özellikten biri tek başına kazancın en az %90'ını sağlıyor. Sütun otomatik çıkarılmaz; uyarı arayüzde, özette ve önerilerde gösterilir ve şüphe varken özellikler "öncelikli izlenmeli" diye önerilmez.
