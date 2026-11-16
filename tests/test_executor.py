@@ -133,3 +133,32 @@ def test_autopilot_surfaces_rejected_plan_actions(monkeypatch, dirty: pd.DataFra
     result = AutopilotEngine().run_full_autopilot(dirty)
     assert "Harcama" in result.cleaned_frame.columns
     assert [item.column for item in result.rejected_actions] == ["Harcama"]
+
+
+# --- Audit kanıtı: örnekler değişen satırlardan ---------------------------------------------------
+
+
+def test_audit_samples_show_actual_changes(dirty: pd.DataFrame) -> None:
+    executor = ActionExecutor()
+    executor.strip_whitespace(dirty)
+    log = executor.audit_logs[0]
+    assert len(log.before_sample) == 5 and all(old != new for old, new in zip(log.before_sample, log.after_sample))
+    assert all(dirty.loc[row, "Müşteri Adı"] == old for row, old in zip(log.sample_rows, log.before_sample))
+
+
+def test_audit_samples_for_imputation_and_clipping() -> None:
+    frame = pd.DataFrame({"x": [1.0, 2.0, None, 3.0, None, 4.0, 2.5, 3.5, 100.0, 2.0]})
+    executor = ActionExecutor()
+    filled = executor.impute_median(frame, "x")
+    impute_log = executor.audit_logs[0]
+    assert impute_log.sample_rows == [2, 4] and all(pd.isna(value) for value in impute_log.before_sample)
+    executor.cap_outliers_iqr(filled, column="x")
+    clip_log = executor.audit_logs[1]
+    assert clip_log.sample_rows == [8] and clip_log.before_sample == [100.0]
+
+
+def test_audit_samples_for_dropped_mostly_empty_column(dirty: pd.DataFrame) -> None:
+    executor = ActionExecutor()
+    executor.drop_high_null_columns(dirty)
+    sparse = next(log for log in executor.audit_logs if log.column == "Neredeyse Boş")
+    assert sparse.before_sample == ["var"] * 5 and sparse.sample_rows[0] >= 190

@@ -22,8 +22,9 @@ def test_automatic_drop_reason_does_not_claim_user_approval() -> None:
     executor.execute_plan(frame, [ColumnPlan(column="Notlar", action="drop_column", reason="%90 üzerinde boş.")])
     reason = executor.audit_logs[0].reason
     assert "onay" not in reason and "%90'dan fazlası boş" in reason and "%95,0" in reason
-    executor.drop_column(frame, "değer", "İlgisiz sütun.")
-    assert "İlgisiz sütun" in executor.audit_logs[-1].reason
+    # Dolu ve değişken bir sütun plan gerekçesiyle silinmez; gerekçe ret kaydında kalır (veri koruma kontrolü).
+    kept = executor.drop_column(frame, "değer", "İlgisiz sütun.")
+    assert "değer" in kept.columns and executor.rejected_actions[-1].plan_reason == "İlgisiz sütun."
 
 
 @pytest.mark.parametrize("column", ["Yaş", "yaş", "BirimFiyat", "sale_price", "Adet", "stock_quantity"])

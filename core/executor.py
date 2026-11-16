@@ -26,6 +26,10 @@ class AuditLog(BaseModel):
     affected_count: int
     before_sample: list[Any] = Field(default_factory=list)
     after_sample: list[Any] = Field(default_factory=list)
+    sample_rows: list[Any] = Field(default_factory=list)  # örneklerin geldiği satırlar (girdi indeksi)
+
+
+_AUDIT_SAMPLES = 5
 
 
 class RejectedAction(BaseModel):
@@ -48,17 +52,38 @@ class ActionExecutor:
         ))
 
     def _record(self, column: str, action: str, reason: str, count: int,
-                before: pd.Series | list[Any], after: pd.Series | list[Any]) -> None:
+                before: pd.Series | list[Any], after: pd.Series | list[Any],
+                changed: pd.Series | None = None, rows: list[Any] | None = None) -> None:
+        """Değişikliği kaydeder. Örnekler, değişikliğin kanıtı olsun diye değişen satırlardan seçilir.
+
+        `changed` verilmezse önce/sonra serilerinden hesaplanır; sütun silmede (sonrası boş) örnekler boş
+        olmayan değerlerden alınır. `sample_rows`, örneklerin hangi satırlardan geldiğini gösterir.
+        """
+        sample_rows: list[Any] = list(rows or [])
+        if isinstance(before, pd.Series) and isinstance(after, pd.Series) and len(after):
+            if changed is None:
+                old, new = before.astype(object), after.astype(object)
+                changed = ~((old == new) | (old.isna() & new.isna()))
+            index = changed[changed.fillna(False).astype(bool)].index[:_AUDIT_SAMPLES]
+            before_sample, after_sample = before.loc[index].tolist(), after.loc[index].tolist()
+            sample_rows = list(index)
+        elif isinstance(before, pd.Series):
+            values = before.dropna() if before.notna().any() else before
+            before_sample, after_sample = values.head(_AUDIT_SAMPLES).tolist(), list(after[:_AUDIT_SAMPLES])
+            sample_rows = sample_rows or list(values.head(_AUDIT_SAMPLES).index)
+        else:
+            before_sample, after_sample = list(before[:_AUDIT_SAMPLES]), list(after[:_AUDIT_SAMPLES])
         self.audit_logs.append(AuditLog(
             column=column, action=action, reason=reason, affected_count=int(count),
-            before_sample=list(before[:5]), after_sample=list(after[:5]),
+            before_sample=before_sample, after_sample=after_sample,
+            sample_rows=[int(row) if isinstance(row, (int, np.integer)) else str(row) for row in sample_rows],
         ))
 
     def drop_constant_columns(self, frame: pd.DataFrame) -> pd.DataFrame:
         result = frame.copy()
         for column in list(result.columns):
             if result[column].nunique(dropna=False) <= 1:
-                values = result[column].head(5)
+                values = result[column]
                 result = result.drop(columns=[column])
                 self._record(str(column), "Sabit sütunu kaldır", "Tek değer içerdiği için kaldırıldı.",
                              len(frame), values, [])
@@ -96,7 +121,7 @@ class ActionExecutor:
         for column in list(result.columns):
             if result[column].isna().mean() > threshold:
                 self._record(str(column), "Boş sütunu kaldır", f"%{decimal_tr(threshold * 100, 0)}'dan fazlası boş olduğu için otomatik kaldırıldı.",
-                             int(result[column].isna().sum()), result[column].head(5), [])
+                             int(result[column].isna().sum()), result[column], [])
                 result = result.drop(columns=[column])
         return result
 
@@ -105,8 +130,10 @@ class ActionExecutor:
         mask = result.duplicated()
         count = int(mask.sum())
         if count:
+            duplicates = result.loc[mask].head(_AUDIT_SAMPLES)
             self._record("Tüm sütunlar", "Mükerrerleri kaldır", "Tamamen aynı satırlar kaldırıldı.",
-                         count, [" | ".join(map(str, row)) for row in result.loc[mask].head(5).itertuples(index=False)], [])
+                         count, [" | ".join(map(str, row)) for row in duplicates.itertuples(index=False)], [],
+                         rows=list(duplicates.index))
             result = result.loc[~mask].reset_index(drop=True)
         return result
 
@@ -136,7 +163,7 @@ class ActionExecutor:
             before = result[column].copy()
             result[column] = result[column].fillna(median)
             self._record(column, "Eksikleri medyan ile doldur", "Sayısal eksikler sütun medyanı ile dolduruldu.",
-                         int(missing.sum()), before, result[column])
+                         int(missing.sum()), before, result[column], changed=missing)
         return result
 
     def impute_mode(self, frame: pd.DataFrame, column: str) -> pd.DataFrame:
@@ -149,7 +176,7 @@ class ActionExecutor:
             before = result[column].copy()
             result[column] = result[column].fillna(modes.iloc[0])
             self._record(column, "Eksikleri mod ile doldur", "Eksikler en sık görülen değer ile dolduruldu.",
-                         int(missing.sum()), before, result[column])
+                         int(missing.sum()), before, result[column], changed=missing)
         return result
 
     def cast_categorical(self, frame: pd.DataFrame, column: str) -> pd.DataFrame:
@@ -237,7 +264,7 @@ class ActionExecutor:
                 before = series.copy()
                 result[current_column] = series.clip(lower, upper)
                 self._record(str(current_column), "Aykırı değerleri sınırla", "IQR yöntemiyle uç değerler sınırlandı.",
-                             int(mask.sum()), before, result[current_column])
+                             int(mask.sum()), before, result[current_column], changed=mask)
         return result
 
     def execute_plan(self, frame: pd.DataFrame, approved_actions: list[Any]) -> pd.DataFrame:
