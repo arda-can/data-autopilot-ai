@@ -1,33 +1,117 @@
-# Data Autopilot AI — Analiz ve Yol Haritası
+# Data Autopilot AI — Güncel Durum, Açık Konular ve Yol Haritası
 
-**Tarih:** 10 Kasım 2026 · **Kapsam:** `app.py`, `core/` (9 modül, ~1.540 satır), `requirements.txt`, `.cursorrules`, `.github/`, `data/`
+**Son güncelleme:** 16 Kasım 2026
 
-## Durum (ilk sprint sonrası)
+Bu belgenin ilk dört bölümü projenin **bugünkü** durumunu anlatır. 10 Kasım 2026'daki ilk analiz, olduğu gibi korunarak en sondaki **Ek A**'ya taşındı; oradaki "test yok", "CI yok" ve eski mimari akışı gibi ifadeler o günkü durumu anlatır, bugün geçerli değildir.
 
-Bu belge sprint öncesi durumu anlatır; aşağıdaki maddeler o tarihten sonra düzeltildi ve her biri regresyon testiyle korunuyor.
+## 1. Güncel durum
+
+Bir CSV/Excel dosyası ya da `data/` klasöründeki birbirine bağlı tablolar verildiğinde uygulama:
+
+- veriyi yalnızca yapısal hijyenden geçirir (biçim düzeltme, boş/sabit sütun, mükerrer satır); eksikleri doldurmaz, aykırı değerleri kırpmaz, yalnızca raporlar;
+- LLM'i (Gemini) yalnızca Pydantic şemasıyla doğrulanan bir plan için kullanır, planın kaynağını gösterir ve veri koruma kontrolünden geçmeyen önerileri uygulamaz;
+- grafik seçer, zaman serisini (trend, mevsimsellik, anomali, aralıklı tahmin) ve iki dönem arasındaki farkı analiz eder;
+- tablolar arası anahtarları bulur ve satır sayısını koruyan onaylı bir planla birleştirir;
+- hedef sütun için çapraz doğrulamayla model seçer, ayrı bir test bölmesinde taban modele karşı ölçer, olası hedef sızıntısını uyarır, kısmi bağımlılık ve what-if sunar;
+- Türkçe sorulara filtre ve tarih kırılımıyla cevap verir, her cevabın eşdeğer pandas ve SQL kodunu gösterir;
+- bunların tümünü HTML ve PDF yönetici raporuna koyar.
+
+**Test ve CI:** 300 test (pytest), bunların dördü Streamlit AppTest ile uçtan uca arayüz testi. GitHub Actions her push'ta Python 3.13 ile çalıştırır. Bağımlılık sürümleri `requirements.txt` içinde sabit.
+
+## 2. Güncel mimari
+
+| Modül | Sorumluluk |
+|---|---|
+| `app.py` | Streamlit arayüzü; yalnızca sunum ve önbellek (anahtarlar içerik özetinden) |
+| `core/ingestion.py` | Okuma: kodlama, tırnak duyarlı ayraç, baştaki sıfırlar, Türkçe okuma hataları, içerik imzaları |
+| `core/columns.py` | Sütun tipi çıkarımı: metin, sayı, tarih, kimlik |
+| `core/health.py` | Kalite skoru, aykırı değer (log ölçekli IQR dahil), alan kuralı ve kategori kopyası bulguları |
+| `core/metadata.py` | LLM'e giden PII maskeli metadata kartı |
+| `core/planner.py` | Gemini planlayıcı, kurallı yerel plan, `PlanOrigin` |
+| `core/executor.py` | Deterministik dönüşümler, audit log (değişen satırlardan örnek), veri koruma kontrolü |
+| `core/autopilot.py` | Orkestrasyon, grafik seçimi (silüetle küme sayısı), hedef önerisi |
+| `core/automl.py` | Çapraz doğrulamayla seçim, ayrı test, zaman bölmesi, tahmin anı, sızıntı uyarısı |
+| `core/explain.py` | Kısmi bağımlılık ve what-if |
+| `core/timeseries.py` | Zaman serisi otopilotu |
+| `core/drift.py` | Dönem karşılaştırması |
+| `core/relations.py` | Çoklu tablo keşfi ve birleştirme |
+| `core/chat.py` | Doğal dil sorgu planı, filtreler, pandas/SQL karşılığı |
+| `core/report.py`, `core/chart_export.py`, `core/formatting.py` | Yönetici raporu (HTML/PDF), statik grafik, Türkçe sayı biçimi |
+
+```mermaid
+flowchart TD
+    SRC["CSV / Excel<br/>veya data/ tabloları"] --> ING["ingestion<br/>okuma + içerik imzası"]
+    ING -->|"çoklu tablo"| REL["relations<br/>anahtar keşfi → onaylı plan"]
+    REL --> AP
+    ING -->|"tek tablo"| AP["autopilot"]
+    AP --> MD["metadata<br/>PII maskesi"] --> PL{"planner<br/>Gemini / yerel"}
+    PL --> EX["executor<br/>yapısal hijyen + veri koruma + audit"]
+    EX --> CL[("temiz veri")]
+    CL --> H["health<br/>kalite, aykırı, alan kuralları"]
+    CL --> CH["grafik seçimi"]
+    CL --> TS["timeseries"]
+    CL --> DR["drift<br/>(iki dönem / iki dosya)"]
+    CL --> ML["automl<br/>CV seçim → ayrı test"] --> XP["explain<br/>PDP, what-if"]
+    CL --> CT["chat<br/>plan → doğrulanmış pandas<br/>+ SQL karşılığı"]
+    H & CH & TS & DR & ML & XP & REL --> RP["report<br/>HTML + PDF"]
+```
+
+## 3. Bulguların durumu
+
+İlk analizdeki (Ek A) ve sonraki inceleme turlarındaki bulgular:
 
 | Madde | Durum | Not |
 |---|---|---|
-| K1 — kimlik/metin sütunlarının sayıya çevrilmesi | ✅ Düzeltildi | `core/columns.py::parse_numeric_text`, tam eşleşme ve TR/ABD biçim tespiti |
-| K2 — bölmeden önce doldurma ve IQR kırpma | ✅ Düzeltildi | Hijyenden çıkarıldı; aykırı değerler yalnızca raporlanıyor |
-| K3 — dar PII maskesi | ✅ Düzeltildi | Yeni desenler, hassas sütun gizleme, biçim maskesi, soru maskesi |
-| Y1 — ISO tarihlerde gün/ay takası | ✅ Düzeltildi | `parse_datetime_text` |
-| Y2 — pandas 3 dtype ve sürümsüz bağımlılıklar | ✅ Düzeltildi | `is_text_series`; sürümler sabitlendi |
-| Y3 — "id" alt dizesi | ✅ Düzeltildi | `is_identifier_name`, tek yerde ve kelime eşleşmesiyle |
-| Y5 — test, git, README, CI | ✅ Düzeltildi | pytest, GitHub Actions (henüz push edilmedi) |
-| O5 — baştaki sıfır kaybı | ◐ Kısmen | Metin olarak okunan kodlar artık korunuyor; okuma sırasında sayıya dönüşenler hâlâ açık |
-| D3 — ölü kod | ◐ Kısmen | `_numeric_pattern` kaldırıldı |
-| Yeni bulgu | ✅ Düzeltildi | `remove_duplicates`, metin sütununda NaN olan mükerrer satırlarda `TypeError` veriyordu |
-| Y6 — yanıltıcı AutoML sonuçları | ◐ Kısmen | Taban model, Türkçe hüküm, önbellek, örneklem ve olası hedef sızıntısı uyarısı (eksiklik ve baskınlık imzası) eklendi; çapraz doğrulama açık |
-| O7 — okunaksız grafikler | ◐ Kısmen | Renk kırılımı yalnızca en fazla 12 sınıflı kategoriyle yapılıyor; sabit `k=3` ve zaman grafiği açık |
-| 4.1 — zaman serisi otopilotu | ✅ Eklendi | `core/timeseries.py`: otomatik frekans, kenar ve kesim temizliği, STL, anomaliler, AICc ile seçilen ETS, mevsimsel naif tabanla 3 pencereli geriye dönük test, %80 aralıklı tahmin; arayüz ve rapor bölümü |
-| 4.4 — dönem karşılaştırması | ✅ Eklendi | `core/drift.py`: şema, eksik oranı, PSI + KS / ki-kare, trafik ışığı |
-| 4.3 — açıklanabilirlik | ✅ Eklendi | `core/explain.py`: PDP ve what-if (SHAP yerine, bağımlılıksız) |
-| 4.7 — çoklu tablo | ✅ Eklendi | `core/relations.py`: anahtar keşfi, eşleştir/topla, onaylı plan |
-| D3 — ölü kod | ✅ Düzeltildi | `DataChatResult` kaldırıldı |
-| 4.2 — yönetici raporu | ✅ Eklendi | `core/report.py`: HTML (etkileşimli grafikler) ve PDF; Word kademesi açık |
+| K1 — kimlik/metin sütunlarının sayıya çevrilmesi | ✅ | Tam eşleşme, TR/ABD biçim tespiti |
+| K2 — bölmeden önce doldurma ve IQR kırpma | ✅ | Hijyenden çıkarıldı; aykırı değerler yalnızca raporlanıyor |
+| K3 — dar PII maskesi | ✅ | Yeni desenler, hassas sütun gizleme, biçim maskesi, soru maskesi |
+| Y1 — ISO tarihlerde gün/ay takası | ✅ | `parse_datetime_text` |
+| Y2 — pandas 3 dtype, sürümsüz bağımlılıklar | ✅ | `is_text_series`; sürümler sabit |
+| Y3 — "id" alt dizesi | ✅ | `is_identifier_name`, kelime eşleşmesi |
+| Y4 — LLM planına korkuluk ve hata görünürlüğü | ◐ | JSON yolu düzeltildi, hatalar ve plan kaynağı görünür, veri koruma kontrolü var; Gemini gerçek anahtarla test edilmedi (sahte SDK testleri var) |
+| Y5 — test, git, README, CI | ✅ | 300 test, GitHub Actions |
+| Y6 — yanıltıcı AutoML sonuçları | ✅ | Taban model, çapraz doğrulamayla seçim, ayrı test, zaman bölmesi, tahmin anı, sızıntı uyarısı |
+| O1 — alan kuralları | ◐ | Negatif olamayan ölçüler ve kategori kopyaları raporlanıyor; kullanıcı tanımlı kural yok |
+| O2 — audit örnekleri | ✅ | Değişen satırlardan, satır numaralarıyla |
+| O3 — okuma hataları, `.xls` | ✅ | Türkçe hata mesajı; `.xls` açıkça reddediliyor |
+| O4 — önbellek ve durum | ✅ | Anahtarlar içerik özetinden; ayarlar anahtara dahil |
+| O5 — baştaki sıfırlar | ✅ | Okuma sırasında metin olarak korunuyor |
+| O6 — kalite skoru doğruluğu ölçmüyor | ⬜ | Açık |
+| O7 — grafik yorumları | ✅ | Küme sayısı silüetle; ham zaman grafiği yerine zaman serisi bölümü |
+| O8 — bellek/performans | ◐ | Baştaki sıfır taraması dosyayı iki kez okur (1M satırda ~1,5 sn) |
+| O9 — Smart App Control | ⬜ | Ortam sorunu; ilk yüklemede DLL engeli |
+| D1 — İngilizce metinler | ◐ | Leaderboard metrik adları (`R2 Score`, `Accuracy`) hâlâ İngilizce |
+| D2 — örnek veri | ⬜ | PII sütunu ve öğrenilebilir sinyal yok |
+| D3 — ölü kod | ✅ | |
+| D4–D9 — bakım | ⬜ | if/elif dağıtım, eager import, API anahtarı yalnızca metin kutusundan, dağınık eşikler, Türkçe/İngilizce alan adı karışıklığı |
 
-Açık kalanlar: Y4, O1-O4, O6, O8-O9, D1-D2, D4-D9; AutoML çapraz doğrulama. Yol haritasındaki beş özellik tamamlandı (bölüm 5.0).
+İnceleme turlarında bulunup düzeltilen ek hatalar (her biri regresyon testiyle): zaman serisinde ortadaki boşluk, hafta sonu "kesim" sanılması ve Şubat kapsaması; drift'te sabit referansta PSI = 0; birleştirmede boş anahtarların eşleşmesi ve tam sayı ölçülerin kaybı; sohbette alt dize filtreleri, filtrelenen ölçünün sorulamaması ve `!=`'in SQL ile farklı sonuç vermesi; CSV'de tırnak içindeki ayraçlar.
+
+## 4. Açık konular ve yol haritası
+
+**Bilinen sınırlar**
+
+- Sızıntı uyarısı sezgiseldir ve zamansal sırayı bilemez; kullanıcı "tahmin anı" ayarlarıyla düzeltir (bilinmeyen sütunu çıkarır ya da bilindiğini onaylar).
+- AutoML tek tabloda en fazla 10.000 satırlık örneklemle eğitilir; rapor bunu belirtir.
+- Gösterilen SQL PostgreSQL söz dizimidir; tarih ve medyan dışındaki işlemler testte SQLite'ta pandas ile karşılaştırılır.
+- Gemini yolu gerçek anahtarla doğrulanmadı.
+
+**Sıradaki adaylar** (veri analisti işvereni gözüyle):
+
+| Sıra | İş | Neden | Efor |
+|---|---|---|---|
+| 1 | README'ye demo GIF'i ve Streamlit Community Cloud yayını | İşverenin depoyu klonlamadan görebileceği tek şey | S |
+| 2 | Metrik ve tablo başlıklarının tamamen Türkçeleştirilmesi (D1) | Arayüz kuralı; demoda göze batıyor | S |
+| 3 | Kullanıcı tanımlı alan kuralları (O1) ve kaliteyi doğruluğa bağlayan skor (O6) | "Kalite 100" iddiasını anlamlı kılar | M |
+| 4 | Temiz Python API ve CLI (Ek A, 4.6) | Raporu ve ileride sesli asistanı aynı çekirdeğe bağlar | M |
+| 5 | Word raporu | PDF varken düşük öncelik | M |
+
+---
+
+# Ek A — İlk analiz (10 Kasım 2026, tarihsel kayıt)
+
+> Bu ek, ilk incelemenin olduğu gibi korunmuş halidir. İçindeki "mevcut mimari", "test yok", "CI yok" gibi ifadeler o günkü durumu anlatır. Bulguların güncel durumu yukarıdaki 3. bölümdedir.
+
 
 ## Nasıl doğrulandı
 
@@ -45,7 +129,7 @@ Bu belgedeki bulgular yalnızca kod okumasına dayanmıyor; aşağıdakiler `.ve
 
 ---
 
-## 1. Mevcut mimari özeti
+## 1. Mimari (10 Kasım 2026 itibarıyla)
 
 ### Modüller
 
@@ -348,7 +432,7 @@ Tasarım ilkeleri:
 
 ## 5. Önceliklendirilmiş yol haritası
 
-### 5.0 Güncel durum ve sıradaki beş özellik (10 Kasım 2026 akşamı)
+### 5.0 Yol haritası güncellemesi (10 Kasım 2026 akşamı; beşi de tamamlandı)
 
 Aşağıdaki özgün tablodan tamamlananlar: 1-8, 13, 16 (PDF kademesi), 20 (CI) ve 21'in bir bölümü (Türkçe sayı biçimi, `width` parametresi, alan kuralı ve kategori kopyası bulguları, açıklayıcı audit gerekçeleri). PDF raporu gerçek Olist ödeme verisiyle sayfa sayfa gözden geçirildi; log ölçekli IQR, sıfıra sabitlenen alt sınır, örneklem notu ve sayfaya üç grafik bu gözden geçirmeden çıktı.
 

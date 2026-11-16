@@ -44,15 +44,26 @@ Bunların her biri gerçek bir hatadan doğdu (ayrıntı: `ANALIZ.md`).
 
 ## Bilinen açıklar
 
-- `AuditLog` alanı `affected_count`; `.cursorrules` `rows_affected` diyor. Örnekler etkilenen satırlardan değil ilk 5 satırdan alınıyor (ANALIZ.md O2).
-- LLM planı için korkuluk ve hata görünürlüğü eksik; Gemini yolu gerçek anahtarla test edilmedi (ANALIZ.md Y4).
-- AutoML'de çapraz doğrulama yok (tek 80/20 bölme).
-- Sızıntı uyarısı zamansal sırayı bilemez: tahmin anında bilinen bir bilgi de işaretlenebilir (ör. yorum puanı için teslim tarihi). Uyarı bu yüzden koşullu yazılır ve sütun otomatik çıkarılmaz.
-- Dönem karşılaştırması, PDP ve çoklu tablo sonuçları henüz yönetici raporuna girmiyor (yalnızca arayüzde).
+Güncel liste ANALIZ.md bölüm 3–4'te. Kod yazarken akılda tutulacaklar:
+
+- `AuditLog` alanı `affected_count`; `.cursorrules` `rows_affected` diyor.
+- Gemini yolu gerçek anahtarla test edilmedi; testler sahte SDK yanıtı kullanır (`tests/test_gemini_paths.py`).
+- Sızıntı uyarısı zamansal sırayı bilemez; kullanıcı "tahmin anı" ayarlarıyla (bilinmeyen sütunu çıkar / bilindiğini onayla) düzeltir. Sütun otomatik çıkarılmaz.
+- Leaderboard metrik adları (`R2 Score`, `Accuracy`) hâlâ İngilizce (D1).
+
+## Doğruluk kuralları (son inceleme turundan)
+
+- **Okuma:** ayraç `csv` modülüyle tırnak kurallarına göre seçilir; baştaki sıfırlı sütunlar metin okunur; okuma hataları Türkçe `ValueError` olur ve arayüz mesajla gösterir. `.xls` desteklenmez (xlrd yok).
+- **Veri koruma:** LLM planı dolu ve değişken bir sütunu silemez, değerlerin %90'ından azı sayıysa dönüştüremez; reddedilen öneri `RejectedAction` olarak kaydedilir.
+- **Önbellek:** anahtarlar içerikten türetilir (`content_signature`, `frame_signature`); bir sonucu etkileyen her ayar (hedef, tahmin anı, zaman sütunu) anahtara girer.
+- **LLM:** yanıt `request_structured` ile alınır (`model_validate_json`); hata yutulmaz, `PlanOrigin` kaynağı ve nedeni taşır.
+- **AutoML:** model yalnızca eğitim bölmesinde çapraz doğrulamayla seçilir; test bölmesi seçime girmez. Rapor eğitim/test satırlarını ve örneklemi belirtir.
+- **Audit:** örnekler değişen satırlardan seçilir, `sample_rows` kaynağı gösterir.
+- **Uçtan uca testler:** `tests/test_app_e2e.py`, `AUTOPILOT_DATA_DIR` ile sentetik tablolar kullanır; yeni arayüz akışı eklenirse buraya test eklenir.
 
 ## Yol haritası
 
-`ANALIZ.md` bölüm 5. Tamamlananlar: kritik düzeltmeler, AutoML taban modeli ve sızıntı uyarısı, HTML/PDF yönetici raporu (`core/report.py`), zaman serisi (`core/timeseries.py`), dönem karşılaştırması (`core/drift.py`), çoklu tablo (`core/relations.py`), sohbet filtreleri ve SQL şeffaflığı (`core/chat.py`), PDP ve what-if (`core/explain.py`). Yol haritasındaki beş özellik bitti; sıradaki adaylar ANALIZ.md 5.0'da.
+`ANALIZ.md` bölüm 4 (güncel); ilk analiz Ek A'da. Tamamlananlar: kritik düzeltmeler, AutoML taban modeli ve sızıntı uyarısı, HTML/PDF yönetici raporu (`core/report.py`), zaman serisi (`core/timeseries.py`), dönem karşılaştırması (`core/drift.py`), çoklu tablo (`core/relations.py`), sohbet filtreleri ve SQL şeffaflığı (`core/chat.py`), PDP ve what-if (`core/explain.py`). Yol haritasındaki beş özellik bitti; sıradaki adaylar ANALIZ.md 5.0'da.
 
 Rapor kuralları: `ExecutiveReport` JSON'a çevrilebilir kalmalı; ham satır ve audit örnekleri rapora girmez; veriden gelen her metin HTML'de `html.escape`, PDF'te `xml_escape` ile kaçırılır.
 
