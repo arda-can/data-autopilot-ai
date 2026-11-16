@@ -21,6 +21,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from pandas.tseries.frequencies import to_offset
 from pydantic import BaseModel, Field
 
 from core.columns import is_geo_coordinate_name, is_identifier_column
@@ -58,7 +59,7 @@ class _Spec:
     unit: str         # "gün"
     genitive: str     # "günün"
     locative: str     # "günde"
-    min_dead_run: int
+    min_dead_run: int  # bu kadar ardışık seyrek dönem, seriyi ayrı bölümlere ayırır
     max_censored: int  # sondan en fazla kaç dönem veri kesimi sayılabilir
     reference_window: int
     cycle: str        # "Haftalık"
@@ -71,7 +72,7 @@ _SPECS: dict[str, _Spec] = {
                "mevsimsel naif (geçen yılın aynı ayı)"),
     "W": _Spec("W", "W-MON", 52, 8, 8, "haftalık", "hafta", "haftanın", "haftada", 3, 2, 8, "Yıllık", "ay",
                "mevsimsel naif (geçen yılın aynı haftası)"),
-    "D": _Spec("D", "D", 7, 28, 28, "günlük", "gün", "günün", "günde", 7, 7, 28, "Haftalık", "gün",
+    "D": _Spec("D", "D", 7, 28, 28, "günlük", "gün", "günün", "günde", 14, 7, 28, "Haftalık", "gün",
                "mevsimsel naif (geçen haftanın aynı günü)"),
 }
 _AUTO_ORDER: tuple[FrequencyCode, ...] = ("M", "W", "D")
@@ -194,9 +195,12 @@ def _period_start(dates: pd.Series, spec: _Spec) -> pd.Series:
     return dates.dt.to_period(period).dt.start_time
 
 
-def _longest_active_run(active: np.ndarray, min_dead_run: int) -> tuple[int, int]:
-    """Etkin dönemlerin, `min_dead_run` uzunlukta ölü aralıklarla bölünmemiş en uzun bölümü [başlangıç, bitiş)."""
-    best = (0, 0)
+def _active_segments(active: np.ndarray, min_dead_run: int) -> list[tuple[int, int]]:
+    """Etkin dönemlerin, en az `min_dead_run` uzunlukta ölü aralıklarla ayrılan bölümleri [başlangıç, bitiş).
+
+    Daha kısa ölü aralıklar bölümün içinde kalır (0 olarak sayılır); bölümler etkin dönemle başlar ve biter.
+    """
+    segments: list[tuple[int, int]] = []
     start: int | None = None
     last_active = -1
     dead = 0
@@ -211,12 +215,21 @@ def _longest_active_run(active: np.ndarray, min_dead_run: int) -> tuple[int, int
             continue
         dead += 1
         if dead >= min_dead_run:
-            if last_active + 1 - start > best[1] - best[0]:
-                best = (start, last_active + 1)
+            segments.append((start, last_active + 1))
             start, dead = None, 0
-    if start is not None and last_active + 1 - start > best[1] - best[0]:
-        best = (start, last_active + 1)
-    return best
+    if start is not None:
+        segments.append((start, last_active + 1))
+    return segments
+
+
+def _pick_segment(segments: list[tuple[int, int]], min_length: int) -> tuple[int, int]:
+    """Tahmin güncel veriye dayanmalı: en az `min_length` dönemlik en son bölüm; yoksa en uzunu."""
+    if not segments:
+        return (0, 0)
+    for segment in reversed(segments):
+        if segment[1] - segment[0] >= min_length:
+            return segment
+    return max(segments, key=lambda segment: segment[1] - segment[0])
 
 
 # --- Motor -----------------------------------------------------------------------------------
@@ -287,25 +300,37 @@ class TimeSeriesEngine:
 
         start, end = 0, len(series)
         if spec.code != "D" and len(series) > 2:
+            # Her dönem kendi sınırlarıyla ölçülür: Şubat 28 gün, Ocak 31 gün.
             first, last = events["date"].min(), events["date"].max()
-            step = index[1] - index[0] if len(index) > 1 else pd.Timedelta(days=1)
-            if (index[0] + step - first) / step < EDGE_COVERAGE:
+            step = to_offset(spec.pandas_freq)
+            first_end, last_end = index[0] + step, index[-1] + step
+            if (first_end - first) / (first_end - index[0]) < EDGE_COVERAGE:
                 start += 1
-            if (last - index[-1]) / step < EDGE_COVERAGE:
+            if (last - index[-1]) / (last_end - index[-1]) < EDGE_COVERAGE:
                 end -= 1
         window = series.iloc[start:end]
         if window.min() >= 0 and (window > 0).any():
             threshold = SPARSE_RATIO * float(window[window > 0].median())
-            run_start, run_end = _longest_active_run((window >= threshold).to_numpy(), spec.min_dead_run)
+            segments = _active_segments((window >= threshold).to_numpy(), spec.min_dead_run)
+            run_start, run_end = _pick_segment(segments, MIN_POINTS)
             start, end = start + run_start, start + run_end
         # Sağdan kesilme: veri dışa aktarımı dönemin ortasında yapıldıysa son dönemler eksik kayıtlıdır ve
         # sahte bir çöküş gibi görünür. Önceki dönemlerin medyanının yarısının altına düşen son birkaç dönem
         # (en fazla `max_censored`) veri kesimi sayılır; bu, okura ayrıca bildirilir.
+        # Kıyas aynı mevsimsel fazla yapılır (cumartesi önceki cumartesilerle); böylece olağan hafta sonu
+        # düşüşü kesim sanılmaz. Yeterli döngü yoksa yakın dönemlerin medyanı kullanılır.
         censored = 0
         if series.iloc[start:end].min() >= 0:
             while censored < spec.max_censored and end - start - 1 > spec.reference_window:
-                reference = float(series.iloc[max(start, end - 1 - spec.reference_window):end - 1].median())
-                if not (reference > 0 and series.iloc[end - 1] < CENSOR_RATIO * reference):
+                position = end - 1
+                same_phase = [
+                    position - cycle * spec.season for cycle in range(1, 5) if position - cycle * spec.season >= start
+                ]
+                if len(same_phase) >= 2:
+                    reference = float(series.iloc[same_phase].median())
+                else:
+                    reference = float(series.iloc[max(start, position - spec.reference_window):position].median())
+                if not (reference > 0 and series.iloc[position] < CENSOR_RATIO * reference):
                     break
                 end -= 1
                 censored += 1
@@ -351,8 +376,9 @@ class TimeSeriesEngine:
         if data.leading_removed or data.trailing_removed:
             notes.insert(0, (
                 f"Analiz {format_period(y.index[0], spec.code)} – {format_period(y.index[-1], spec.code)} aralığını kapsıyor; "
-                f"başta {data.leading_removed}, sonda {data.trailing_removed} {spec.unit} tam kapsanmadığı veya seyrek "
-                f"olduğu (tipik değerin %{decimal_tr(SPARSE_RATIO * 100, 0)}'undan az) için dışarıda bırakıldı."
+                f"başta {data.leading_removed}, sonda {data.trailing_removed} {spec.unit} tam kapsanmadığı, seyrek olduğu "
+                f"(tipik değerin %{decimal_tr(SPARSE_RATIO * 100, 0)}'undan az) veya güncel bölümden uzun bir kayıt "
+                "boşluğuyla ayrıldığı için dışarıda bırakıldı."
             ))
         if data.censored:
             notes.append(

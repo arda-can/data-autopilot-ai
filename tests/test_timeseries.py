@@ -7,7 +7,8 @@ import pytest
 from core.timeseries import (
     TimeSeriesEngine,
     TimeSeriesSummary,
-    _longest_active_run,
+    _active_segments,
+    _pick_segment,
     date_columns,
     format_period,
     value_columns,
@@ -173,12 +174,15 @@ def test_column_helpers(daily_frame: pd.DataFrame) -> None:
     assert value_columns(frame.assign(adet=np.arange(len(frame)) % 5)) == ["adet"]
 
 
-def test_longest_active_run() -> None:
+def test_active_segments_and_pick() -> None:
     active = np.array([1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 1], dtype=bool)
-    assert _longest_active_run(active, min_dead_run=3) == (0, 9)      # 2 günlük boşluk bölmez
-    assert _longest_active_run(active, min_dead_run=2) == (3, 9)
-    assert _longest_active_run(active, min_dead_run=4) == (0, 14)
-    assert _longest_active_run(np.zeros(4, dtype=bool), 2) == (0, 0)
+    assert _active_segments(active, min_dead_run=3) == [(0, 9), (12, 14)]   # 2 dönemlik boşluk bölmez
+    assert _active_segments(active, min_dead_run=2) == [(0, 1), (3, 9), (12, 14)]
+    assert _active_segments(active, min_dead_run=4) == [(0, 14)]
+    assert _active_segments(np.zeros(4, dtype=bool), 2) == []
+    assert _pick_segment([(0, 9), (12, 14)], min_length=2) == (12, 14)     # en güncel yeterli bölüm
+    assert _pick_segment([(0, 9), (12, 14)], min_length=5) == (0, 9)       # güncel bölüm çok kısa
+    assert _pick_segment([], min_length=5) == (0, 0)
 
 
 def test_format_period() -> None:
@@ -209,3 +213,71 @@ def test_autopilot_reports_why_timeseries_failed() -> None:
     result = AutopilotEngine().run_full_autopilot(frame)
     assert result.timeseries is None
     assert result.timeseries_message.startswith("Zaman serisi analizi yapılamadı: ")
+
+
+# --- Gözden geçirmede bulunan kenar durumları ----------------------------------------------------
+
+
+def test_mid_series_gap_keeps_recent_data() -> None:
+    """100 dolu gün + 7 boş gün + 30 dolu gün: güncel 30 gün atılmamalı, boşluk 0 sayılmalı."""
+    counts = np.concatenate([np.full(100, 50), np.zeros(7, dtype=int), np.full(30, 50)])
+    summary = TimeSeriesEngine().analyze(_events(counts), frequency="D").summary
+    last_day = START + pd.Timedelta(days=len(counts) - 1)
+    assert summary.end == last_day.date().isoformat()
+    assert summary.forecast[0].date == (last_day + pd.Timedelta(days=1)).date().isoformat()
+    assert summary.periods == len(counts)
+    assert any("Hiç kaydı olmayan 7 gün" in note for note in summary.notes)
+
+
+def test_long_gap_starts_analysis_at_the_latest_regime() -> None:
+    """Olist'teki gibi: kısa bir deneme dönemi, uzun sessizlik, sonra asıl dönem → asıl dönem analiz edilir."""
+    counts = np.concatenate([np.full(20, 50), np.zeros(60, dtype=int), _trend_weekly_counts(days=200)])
+    summary = TimeSeriesEngine().analyze(_events(counts)).summary
+    assert summary.start == (START + pd.Timedelta(days=80)).date().isoformat()
+    assert summary.end == (START + pd.Timedelta(days=len(counts) - 1)).date().isoformat()
+    assert "başta 80" in summary.notes[0]
+
+
+def test_regular_weekend_dip_is_not_treated_as_censoring() -> None:
+    """Hafta içi 100, hafta sonu 20: seri pazar günü bittiğinde son cumartesi ve pazar silinmemeli."""
+    week = np.array([100, 100, 100, 100, 100, 20, 20])
+    counts = np.tile(week, 12)  # START pazartesi → seri pazar günü biter
+    summary = TimeSeriesEngine().analyze(_events(counts), frequency="D").summary
+    last_day = START + pd.Timedelta(days=len(counts) - 1)
+    assert last_day.dayofweek == 6
+    assert summary.end == last_day.date().isoformat()
+    assert not any("veri kesimi" in note for note in summary.notes)
+    assert pd.Timestamp(summary.forecast[0].date).dayofweek == 0
+
+
+def test_genuine_tail_drop_is_still_censored_against_same_weekday() -> None:
+    week = np.array([100, 100, 100, 100, 100, 40, 40])
+    counts = np.tile(week, 12)
+    counts[-2:] = [12, 11]  # seyrek eşiğinin (10) üstünde ama cumartesi/pazarın olağan seviyesinin (40) yarısının altında
+    summary = TimeSeriesEngine().analyze(_events(counts), frequency="D").summary
+    assert any(note.startswith("Son 2 gün") for note in summary.notes)
+
+
+def test_complete_february_is_kept() -> None:
+    """Son ayın kapsaması kendi uzunluğuyla ölçülür: 28 Şubat akşamına kadar dolu Şubat eksik sayılmaz."""
+    from core.timeseries import _SPECS
+
+    days = pd.date_range("2023-03-01", "2024-02-29", freq="D")  # 2024 artık yıl: Şubat 29 gün
+    frame = pd.DataFrame({"tarih": np.repeat(days.to_numpy(), 3) + np.tile(pd.to_timedelta([9, 14, 20], unit="h"), len(days))})
+    built = TimeSeriesEngine._build(frame.rename(columns={"tarih": "date"}), _SPECS["M"])
+    assert built.series.index[0] == pd.Timestamp("2023-03-01")
+    assert built.series.index[-1] == pd.Timestamp("2024-02-01")
+
+    # Aralıkta (31 gün) başlayıp 28 Şubat akşamı biten seri: ilk ayın uzunluğuyla ölçülürse Şubat %90'ın altında kalırdı.
+    days = pd.date_range("2022-12-01", "2023-02-28", freq="D")
+    frame = pd.DataFrame({"date": days + pd.Timedelta(hours=20)})
+    built = TimeSeriesEngine._build(frame, _SPECS["M"])
+    assert list(built.series.index) == [pd.Timestamp("2022-12-01"), pd.Timestamp("2023-01-01"), pd.Timestamp("2023-02-01")]
+
+
+def test_partial_last_month_is_still_dropped() -> None:
+    from core.timeseries import _SPECS
+
+    days = pd.date_range("2023-01-01", "2023-03-10", freq="D")
+    built = TimeSeriesEngine._build(pd.DataFrame({"date": days + pd.Timedelta(hours=12)}), _SPECS["M"])
+    assert built.series.index[-1] == pd.Timestamp("2023-02-01") and built.trailing_removed == 1
