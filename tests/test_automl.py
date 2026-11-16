@@ -129,3 +129,50 @@ def test_date_difference_features() -> None:
     assert result.feature_importance["Feature"].iloc[0] in (
         "teslim − tahmini_teslim (gün)", "teslim − satin_alma (gün)",
     )
+
+
+# --- Değerlendirme: çapraz doğrulamayla seçim, ayrı test, zaman bölmesi ve tahmin anı -------------
+
+
+def test_model_is_selected_by_cross_validation_not_test(orders: pd.DataFrame) -> None:
+    result = AutoMLEngine().run(orders, "price")
+    cv_column = "CV R2 Score (ort.)"
+    assert {cv_column, "CV std", "R2 Score", "MAE", "RMSE"} <= set(result.leaderboard.columns)
+    non_baseline = result.leaderboard[result.leaderboard["Model"] != result.baseline_model]
+    assert result.best_model == non_baseline.sort_values(cv_column, ascending=False)["Model"].iloc[0]
+    assert result.leaderboard[cv_column].is_monotonic_decreasing
+    assert result.train_rows + result.test_rows == len(orders) and result.test_rows == 60
+    assert result.cv_folds == 5 and result.split_method.startswith("rastgele")
+    assert "5 katlı çapraz doğrulamayla seçildi" in result.verdict
+    assert result.cv_score == pytest.approx(non_baseline[cv_column].max())
+
+
+def test_time_split_tests_on_the_latest_period() -> None:
+    rng = np.random.default_rng(6)
+    rows = 400
+    dates = pd.date_range("2022-01-01", periods=rows, freq="D")
+    frame = pd.DataFrame({"tarih": dates[rng.permutation(rows)], "x": rng.normal(size=rows)})
+    frame["y"] = 3 * frame["x"] + rng.normal(0, 0.3, rows)
+    result = AutoMLEngine().run(frame, "y", time_column="tarih")
+    assert result.split_method.startswith("zamana göre (tarih") and result.time_column == "tarih"
+    assert result.test_rows == 80 and result.beats_baseline
+    test_months = set(result.background["tarih_month"])
+    latest = frame.sort_values("tarih").iloc[-80:]
+    assert test_months <= set(latest["tarih"].dt.month)
+    with pytest.raises(ValueError, match="tarih sütunu olmalı"):
+        AutoMLEngine().run(frame, "y", time_column="x")
+
+
+def test_excluded_columns_are_not_used(orders: pd.DataFrame) -> None:
+    result = AutoMLEngine().run(orders, "price", exclude_columns=["product_width_cm"])
+    assert result.excluded_columns == ["product_width_cm"]
+    assert "product_width_cm" not in set(result.feature_importance["Feature"])
+
+
+def test_known_columns_suppress_leakage_warning_but_are_recorded(orders: pd.DataFrame) -> None:
+    from core.executor import ActionExecutor
+
+    frame = ActionExecutor().parse_datetime_columns(orders)
+    result = AutoMLEngine().run(frame, "order_status", known_columns=["order_delivered_customer_date"])
+    assert result.leakage_warnings == [] and result.leakage_suspects == []
+    assert result.acknowledged_columns == ["order_delivered_customer_date"]

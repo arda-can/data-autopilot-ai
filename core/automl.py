@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
+
+import numpy as np
 
 import pandas as pd
 import plotly.express as px
@@ -16,7 +20,7 @@ from sklearn.ensemble import (
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, StratifiedKFold, TimeSeriesSplit, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.base import clone
@@ -44,10 +48,20 @@ class AutoMLResult:
     target: str = ""
     model: Any = None  # en iyi, eğitilmiş pipeline (açıklama ve what-if için)
     background: pd.DataFrame | None = None  # test bölmesinden en fazla 500 satır (hazırlanmış özellikler)
+    train_rows: int = 0
+    test_rows: int = 0
+    cv_folds: int = 0
+    split_method: str = ""
+    cv_score: float = float("nan")
+    cv_std: float = float("nan")
+    time_column: str | None = None
+    excluded_columns: list[str] = field(default_factory=list)
+    acknowledged_columns: list[str] = field(default_factory=list)
 
 
 # Tek bir özellik, modelin taban üzerindeki kazancının bu kadarını tek başına sağlıyorsa sızıntı şüphesi.
 LEAKAGE_SHARE = 0.90
+_CV_LARGE_ROWS = 5_000
 _MAX_DATE_COLUMNS = 5
 # Yalnızca boş/dolu bilgisi kazancın bu kadarını açıklıyorsa (sonradan doldurulan alan izi).
 LEAKAGE_MISSING_SHARE = 0.50
@@ -58,16 +72,39 @@ class AutoMLEngine:
     def __init__(self, random_state: int = 42) -> None:
         self.random_state = random_state
 
-    def run(self, frame: pd.DataFrame, target_col: str) -> AutoMLResult:
+    def run(
+        self,
+        frame: pd.DataFrame,
+        target_col: str,
+        time_column: str | None = None,
+        exclude_columns: Iterable[str] = (),
+        known_columns: Iterable[str] = (),
+    ) -> AutoMLResult:
+        """Sızıntısız model karşılaştırması.
+
+        - Veri bir kez eğitim/test olarak bölünür: `time_column` verilirse kronolojik (son %20 test), yoksa
+          rastgele (sınıflandırmada katmanlı).
+        - Model seçimi yalnızca eğitim bölmesinde çapraz doğrulamayla yapılır; test bölmesi seçime katılmaz ve
+          yalnızca nihai skoru ve taban karşılaştırmasını verir.
+        - `exclude_columns`: tahmin anında bilinmeyen sütunlar, modelden çıkarılır.
+        - `known_columns`: tahmin anında bilindiği kullanıcı tarafından onaylanan sütunlar; sızıntı uyarısı
+          verilmez, onay kayda geçer.
+        """
         if target_col not in frame.columns:
             raise ValueError(f"Hedef sütun bulunamadı: {target_col}")
         if self._is_identifier_name(str(target_col)):
             raise ValueError("Kimlik, isim, posta kodu veya referans sütunu hedef olamaz.")
+        excluded = [str(column) for column in exclude_columns if str(column) in frame.columns and column != target_col]
+        known = {str(column) for column in known_columns}
         data = frame.dropna(subset=[target_col]).copy()
+        if time_column is not None:
+            if time_column not in data.columns or not pd.api.types.is_datetime64_any_dtype(data[time_column]):
+                raise ValueError(f"Zaman sırası için '{time_column}' bir tarih sütunu olmalı.")
+            data = data.dropna(subset=[time_column]).sort_values(time_column, kind="stable")
         if data.empty:
             raise ValueError("Hedef sütunda kullanılabilir veri bulunmuyor.")
         y = data.pop(target_col)
-        features = self._feature_columns(data, target_col)
+        features = [column for column in self._feature_columns(data, target_col) if column not in excluded]
         if not features:
             raise ValueError("Model için uygun özellik sütunu bulunamadı.")
         X = self._prepare_features(data[features])
@@ -76,13 +113,22 @@ class AutoMLEngine:
         problem_type = self._problem_type(y, target_col)
         if problem_type == "Classification" and pd.api.types.is_numeric_dtype(y):
             y = y.astype(str)
-        stratify = y if problem_type == "Classification" and y.value_counts().min() >= 2 else None
-        try:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=self.random_state, stratify=stratify
-            )
-        except ValueError as exc:
-            raise ValueError(f"Veri eğitim/test ayrımı için yetersiz: {exc}") from exc
+        classification = problem_type == "Classification"
+        if time_column is not None:
+            cut = int(len(X) * 0.8)
+            if cut < 10 or len(X) - cut < 2:
+                raise ValueError("Veri zamana göre eğitim/test ayrımı için yetersiz.")
+            X_train, X_test, y_train, y_test = X.iloc[:cut], X.iloc[cut:], y.iloc[:cut], y.iloc[cut:]
+            split_method = f"zamana göre ({time_column}; son %20 test)"
+        else:
+            stratify = y if classification and y.value_counts().min() >= 2 else None
+            try:
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X, y, test_size=0.2, random_state=self.random_state, stratify=stratify
+                )
+            except ValueError as exc:
+                raise ValueError(f"Veri eğitim/test ayrımı için yetersiz: {exc}") from exc
+            split_method = "rastgele, katmanlı (%20 test)" if stratify is not None else "rastgele (%20 test)"
         numeric = X_train.select_dtypes(include="number").columns.tolist()
         categorical = [column for column in X_train.columns if column not in numeric]
         preprocessor = ColumnTransformer(
@@ -98,54 +144,78 @@ class AutoMLEngine:
             ],
             remainder="drop",
         )
+        folds = 5 if len(X_train) <= _CV_LARGE_ROWS else 3
+        if time_column is not None:
+            splitter: Any = TimeSeriesSplit(n_splits=folds)
+        elif classification and y_train.value_counts().min() >= folds:
+            splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=self.random_state)
+        else:
+            splitter = KFold(n_splits=folds, shuffle=True, random_state=self.random_state)
+        scoring = "f1_weighted" if classification else "r2"
+        sort_column = "F1-Score (Weighted)" if classification else "R2 Score"
+        cv_column = f"CV {sort_column} (ort.)"
+
         baseline_name, baseline = self._baseline(problem_type)
         models = {**self._models(problem_type), baseline_name: baseline}
         scores: list[dict[str, float | str]] = []
         fitted: dict[str, Pipeline] = {}
         for name, model in models.items():
             pipeline = Pipeline([("preprocessor", clone(preprocessor)), ("model", model)])
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                cv_scores = cross_val_score(
+                    clone(pipeline), X_train, y_train, cv=splitter, scoring=scoring, error_score=np.nan,
+                )
             pipeline.fit(X_train, y_train)
             predictions = pipeline.predict(X_test)
-            if problem_type == "Classification":
-                scores.append({
-                    "Model": name,
-                    "Accuracy": accuracy_score(y_test, predictions),
-                    "F1-Score (Weighted)": f1_score(y_test, predictions, average="weighted", zero_division=0),
-                })
+            row: dict[str, float | str] = {
+                "Model": name,
+                cv_column: float(np.nanmean(cv_scores)) if np.isfinite(cv_scores).any() else np.nan,
+                "CV std": float(np.nanstd(cv_scores)) if np.isfinite(cv_scores).any() else np.nan,
+            }
+            if classification:
+                row["Accuracy"] = accuracy_score(y_test, predictions)
+                row["F1-Score (Weighted)"] = f1_score(y_test, predictions, average="weighted", zero_division=0)
             else:
-                scores.append({
-                    "Model": name,
-                    "R2 Score": r2_score(y_test, predictions),
-                    "MAE": mean_absolute_error(y_test, predictions),
-                    "RMSE": mean_squared_error(y_test, predictions) ** 0.5,
-                })
+                row["R2 Score"] = r2_score(y_test, predictions)
+                row["MAE"] = mean_absolute_error(y_test, predictions)
+                row["RMSE"] = mean_squared_error(y_test, predictions) ** 0.5
+            scores.append(row)
             fitted[name] = pipeline
-        sort_column = "F1-Score (Weighted)" if problem_type == "Classification" else "R2 Score"
-        leaderboard = pd.DataFrame(scores).sort_values(sort_column, ascending=False).reset_index(drop=True)
-        # Taban model hiçbir özelliğe bakmaz; gerçek modeller ancak onu geçerse bir şey öğrenmiş sayılır.
+        # Sıralama ve seçim yalnızca çapraz doğrulamaya göre; test sütunları seçime katılmaz.
+        leaderboard = pd.DataFrame(scores).sort_values(cv_column, ascending=False, na_position="last").reset_index(drop=True)
         is_baseline = leaderboard["Model"] == baseline_name
-        best_model = str(leaderboard.loc[~is_baseline, "Model"].iloc[0])
-        best_score = float(leaderboard.loc[~is_baseline, sort_column].iloc[0])
+        candidates = leaderboard.loc[~is_baseline & leaderboard[cv_column].notna()]
+        if candidates.empty:
+            raise ValueError("Çapraz doğrulamada hiçbir model değerlendirilemedi; veri çok küçük veya tek sınıflı.")
+        best_row = candidates.iloc[0]
+        best_model = str(best_row["Model"])
+        best_score = float(best_row[sort_column])
         baseline_score = float(leaderboard.loc[is_baseline, sort_column].iloc[0])
-        beats_baseline = best_score - baseline_score > (0.02 if problem_type == "Classification" else 0.05)
+        beats_baseline = best_score - baseline_score > (0.02 if classification else 0.05)
         base_text, best_text = (f"{score:.3f}".replace(".", ",") for score in (baseline_score, best_score))
+        cv_text = (
+            f"{folds} katlı çapraz doğrulamayla seçildi (CV {float(best_row[cv_column]):.3f} ± "
+            f"{float(best_row['CV std']):.3f}); test skoru seçime katılmayan bölmeden"
+        ).replace(".", ",")
         if beats_baseline:
             verdict = (
                 f"{best_model}, hiçbir özelliğe bakmayan taban modeli geçti "
-                f"({sort_column}: taban {base_text} → model {best_text})."
+                f"(test {sort_column}: taban {base_text} → model {best_text}). Model {cv_text}."
             )
         else:
             verdict = (
-                f"Modeller taban modeli anlamlı biçimde geçemedi ({sort_column}: taban {base_text}, "
-                f"en iyi model {best_text}). Bu hedef mevcut sütunlarla güvenilir biçimde tahmin edilemiyor."
+                f"Modeller taban modeli anlamlı biçimde geçemedi (test {sort_column}: taban {base_text}, "
+                f"en iyi model {best_text}). Bu hedef mevcut sütunlarla güvenilir biçimde tahmin edilemiyor. "
+                f"Model {cv_text}."
             )
         importance = self._importance(fitted[best_model], X_test, y_test)
-        suspects, warnings_text = (
+        suspects, warnings_text, acknowledged = (
             self._leakage_check(
                 X_train, X_test, y_train, y_test, features, importance,
-                problem_type, baseline_score, best_score,
+                problem_type, baseline_score, best_score, known,
             )
-            if beats_baseline else ([], [])
+            if beats_baseline else ([], [], [])
         )
         figure = px.bar(
             importance.head(30).sort_values("Importance"),
@@ -159,13 +229,16 @@ class AutoMLEngine:
             leakage_suspects=suspects, leakage_warnings=warnings_text, target=str(target_col),
             model=fitted[best_model],
             background=X_test.sample(min(500, len(X_test)), random_state=self.random_state),
+            train_rows=len(X_train), test_rows=len(X_test), cv_folds=folds, split_method=split_method,
+            cv_score=float(best_row[cv_column]), cv_std=float(best_row["CV std"]),
+            time_column=time_column, excluded_columns=excluded, acknowledged_columns=acknowledged,
         )
 
     def _leakage_check(
         self, X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Series, y_test: pd.Series,
         features: list[str], importance: pd.DataFrame, problem_type: str,
-        baseline_score: float, best_score: float,
-    ) -> tuple[list[str], list[str]]:
+        baseline_score: float, best_score: float, known: set[str] | None = None,
+    ) -> tuple[list[str], list[str], list[str]]:
         """Olası hedef sızıntısını iki imzayla arar; sonuç uyarıdır, sütun otomatik çıkarılmaz.
 
         1. Eksiklik imzası: bir sütunun yalnızca boş olup olmaması, modelin taban üzerindeki kazancının en az
@@ -177,7 +250,9 @@ class AutoMLEngine:
         """
         lift = best_score - baseline_score
         if lift <= 0:
-            return [], []
+            return [], [], []
+        known = known or set()
+        acknowledged: list[str] = []
         classification = problem_type == "Classification"
 
         def metric(truth: pd.Series, predicted: Any) -> float:
@@ -206,6 +281,11 @@ class AutoMLEngine:
         warnings_text: list[str] = []
 
         def flag(name: str, share: float, detail: str) -> None:
+            if name in known:
+                # Kullanıcı bu bilginin tahmin anında bilindiğini onayladı: uyarı yerine kayıt.
+                if name not in acknowledged:
+                    acknowledged.append(name)
+                return
             if name in suspects:
                 return
             suspects.append(name)
@@ -273,7 +353,7 @@ class AutoMLEngine:
             share = (metric(y_test, predictions) - baseline_score) / lift
             if share >= LEAKAGE_SHARE:
                 flag(name, share, "sütunu")
-        return suspects, warnings_text
+        return suspects, warnings_text, acknowledged
 
     @staticmethod
     def _problem_type(target: pd.Series, target_col: str = "") -> str:

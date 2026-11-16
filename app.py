@@ -467,17 +467,46 @@ selected_target = st.selectbox(
 )
 automl = result.automl_result
 automl_error = ""
+automl_settings: tuple = (None, (), ())
+if selected_target != "-- Hedef seçin --":
+    with st.expander("Değerlendirme ve tahmin anı ayarları"):
+        st.caption(
+            "Model, eğitim bölmesinde çapraz doğrulamayla seçilir; test bölmesi seçime katılmaz. Tahmin anında "
+            "hangi bilgilerin bilindiğini belirterek sızıntıyı önleyin ve gerekirse zamana göre değerlendirin."
+        )
+        time_options = ["Yok (rastgele bölme)", *date_columns(cleaned)]
+        evaluation_time = st.selectbox(
+            "Zaman sırası sütunu (test = en son %20 dönem)", time_options, key=f"automl_time_{selected_target}"
+        )
+        feature_options = [column for column in target_options if column != selected_target]
+        excluded_columns = st.multiselect(
+            "Tahmin anında bilinmeyen sütunlar (modelden çıkarılır)", feature_options,
+            key=f"automl_exclude_{selected_target}",
+        )
+        known_columns = st.multiselect(
+            "Tahmin anında bilindiğini onayladığınız sütunlar (sızıntı uyarısı verilmez)", feature_options,
+            key=f"automl_known_{selected_target}",
+        )
+    automl_settings = (
+        None if evaluation_time == time_options[0] else evaluation_time,
+        tuple(sorted(excluded_columns)), tuple(sorted(known_columns)),
+    )
 if selected_target != "-- Hedef seçin --" and (
     result.suggested_target is not None and selected_target != result.suggested_target
     or result.suggested_target is None and selected_target != target_options_for_ui[0]
+    or automl_settings != (None, (), ())
 ):
-    # Aynı veri ve hedef için model yalnızca bir kez eğitilir; her yeniden çizimde tekrarlanmaz.
+    # Aynı veri, hedef ve ayarlar için model yalnızca bir kez eğitilir; her yeniden çizimde tekrarlanmaz.
     cache = st.session_state.setdefault("automl_cache", {})
-    cache_key = (st.session_state.data_signature, selected_target)
+    cache_key = (st.session_state.data_signature, selected_target, automl_settings)
     if cache_key not in cache:
         sample = cleaned.sample(10_000, random_state=42) if len(cleaned) > 10_000 else cleaned
         try:
-            cache[cache_key] = AutoMLEngine().run(sample, selected_target)
+            with st.spinner("Modeller çapraz doğrulamayla karşılaştırılıyor..."):
+                cache[cache_key] = AutoMLEngine().run(
+                    sample, selected_target, time_column=automl_settings[0],
+                    exclude_columns=automl_settings[1], known_columns=automl_settings[2],
+                )
         except (ValueError, TypeError, KeyError) as exc:
             cache[cache_key] = f"'{selected_target}' hedefi için AutoML çalıştırılamadı: {exc}"
     cached = cache[cache_key]
@@ -488,8 +517,20 @@ if automl is not None:
     st.write(f"**Problem tipi:** {automl.problem_type}")
     st.write(f"**En iyi model:** {automl.best_model}")
     (st.success if automl.beats_baseline and not automl.leakage_warnings else st.warning)(automl.verdict)
+    st.caption(
+        f"Değerlendirme: {automl.split_method} · eğitim {integer_tr(automl.train_rows)} / test "
+        f"{integer_tr(automl.test_rows)} satır · {automl.cv_folds} katlı çapraz doğrulama"
+        + (f" · çıkarılan: {', '.join(automl.excluded_columns)}" if automl.excluded_columns else "")
+        + (f" · tahmin anında bilindiği onaylanan: {', '.join(automl.acknowledged_columns)}"
+           if automl.acknowledged_columns else "")
+    )
     for leakage_warning in automl.leakage_warnings:
         st.warning(leakage_warning)
+    if automl.leakage_warnings:
+        st.caption(
+            "Bu bilgi tahmin anında bilinmiyorsa “Değerlendirme ve tahmin anı ayarları” bölümünde modelden "
+            "çıkarın; biliniyorsa onaylayın, uyarı kalkar."
+        )
     st.subheader("Leaderboard")
     st.dataframe(display_frame(automl.leaderboard), width="stretch", hide_index=True)
     st.subheader("Özellik Önemi")
@@ -497,7 +538,7 @@ if automl is not None:
     if automl.model is not None and automl.background is not None:
         st.subheader("Model neden böyle tahmin ediyor? (Kısmi bağımlılık)")
         explain_cache = st.session_state.setdefault("explain_cache", {})
-        explain_key = (st.session_state.data_signature, selected_target, automl.best_model)
+        explain_key = (st.session_state.data_signature, selected_target, automl_settings, automl.best_model)
         if explain_key not in explain_cache:
             try:
                 explain_cache[explain_key] = ModelExplainer().explain(automl)
