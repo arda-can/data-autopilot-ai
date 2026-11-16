@@ -73,3 +73,22 @@ def test_statistical_plan_actions_are_not_executed(monkeypatch: pytest.MonkeyPat
 
 def test_charts_are_produced(orders_result: AutopilotResult, dirty_result: AutopilotResult) -> None:
     assert orders_result.charts and dirty_result.charts
+
+
+def test_cluster_count_is_measured_not_assumed() -> None:
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    centers = np.array([[0, 0, 0], [8, 8, 8], [-8, 8, 0], [8, -8, 4]])
+    points = np.vstack([center + rng.normal(0, 0.6, (150, 3)) for center in centers])
+    frame = pd.DataFrame(points, columns=["a_ölçü", "b_ölçü", "c_ölçü"])
+    charts = AutopilotEngine()._select_charts(frame)[0]
+    insight = next(chart.insight for chart in charts if chart.title == "Yapay Zeka Kümeleme Haritası")
+    assert insight.startswith("Küme sayısı 4, 2–6 arası denenen değerler içinde en yüksek silüet skoruyla seçildi")
+    assert "ayrışmıyor" not in insight and "zayıf ayrışıyor" not in insight
+
+    noise = pd.DataFrame(rng.normal(size=(400, 3)), columns=["a_ölçü", "b_ölçü", "c_ölçü"])
+    insight = next(chart.insight for chart in AutopilotEngine()._select_charts(noise)[0]
+                   if chart.title == "Yapay Zeka Kümeleme Haritası")
+    assert ("belirgin biçimde ayrışmıyor" in insight or "zayıf ayrışıyor" in insight)
+    assert "Üç küme bulundu" not in insight

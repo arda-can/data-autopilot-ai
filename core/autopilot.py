@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
@@ -49,6 +50,12 @@ class AutopilotResult:
     timeseries_message: str = ""
     rejected_actions: list[RejectedAction] = field(default_factory=list)
     plan_origin: PlanOrigin | None = None
+
+
+_SILHOUETTE_SAMPLE = 2_000
+# Kaufman ve Rousseeuw ölçeği: <0,25 yapı yok, 0,25–0,50 zayıf, >0,50 makul ayrışma.
+NO_STRUCTURE_SILHOUETTE = 0.25
+WEAK_SILHOUETTE = 0.50
 
 
 class AutopilotEngine:
@@ -172,10 +179,11 @@ class AutopilotEngine:
 
         model_frame = frame[numeric].dropna() if numeric else pd.DataFrame()
         cluster_labels: pd.Series | None = None
-        if len(numeric) >= 3 and len(model_frame) >= 3:
+        if len(numeric) >= 3 and len(model_frame) >= 10:
             scaled = StandardScaler().fit_transform(model_frame)
+            clusters, silhouette = self._choose_cluster_count(scaled)
             cluster_labels = pd.Series(
-                KMeans(n_clusters=3, n_init=10, random_state=42).fit_predict(scaled),
+                KMeans(n_clusters=clusters, n_init=10, random_state=42).fit_predict(scaled),
                 index=model_frame.index,
                 name="Küme",
             )
@@ -187,7 +195,13 @@ class AutopilotEngine:
             add(
                 "Yapay Zeka Kümeleme Haritası",
                 "Üç veya daha fazla metrik PCA ve KMeans ile otomatik segmentlere ayrıldı.",
-                f"Üç küme bulundu; ilk iki temel bileşen toplam varyansın %{decimal_tr(explained)} oranını açıklıyor.",
+                f"Küme sayısı {clusters}, 2–6 arası denenen değerler içinde en yüksek silüet skoruyla seçildi "
+                f"({decimal_tr(silhouette, 2)}). "
+                + ("Kümeler belirgin biçimde ayrışmıyor; segmentler gerçek gruplar değil, keyfi bir bölümlemedir. "
+                   if silhouette < NO_STRUCTURE_SILHOUETTE else
+                   "Kümeler zayıf ayrışıyor; segmentler kesin gruplar değil, kaba bir bölümlemedir. "
+                   if silhouette < WEAK_SILHOUETTE else "")
+                + f"İlk iki temel bileşen toplam varyansın %{decimal_tr(explained)} oranını açıklıyor.",
                 px.scatter(pca_frame, x="PC1", y="PC2", color="Küme", symbol="Küme",
                            color_discrete_sequence=px.colors.qualitative.Bold,
                            title="PCA + KMeans segmentasyonu"),
@@ -287,6 +301,21 @@ class AutopilotEngine:
         priority = {"Korelasyon Isı Haritası": 0, "Paralel Koordinatlar": 1}
         selected = sorted(charts, key=lambda chart: priority.get(chart.title, 2))[:6]
         return selected, [chart.insight for chart in selected]
+
+    @staticmethod
+    def _choose_cluster_count(scaled: np.ndarray) -> tuple[int, float]:
+        """Küme sayısı önceden sabitlenmez: 2–6 arası, en fazla 2.000 satırlık örneklemde silüet skoruyla seçilir."""
+        rng = np.random.default_rng(42)
+        sample = scaled[rng.choice(len(scaled), _SILHOUETTE_SAMPLE, replace=False)] if len(scaled) > _SILHOUETTE_SAMPLE else scaled
+        best = (2, -1.0)
+        for clusters in range(2, min(6, len(sample) - 1) + 1):
+            labels = KMeans(n_clusters=clusters, n_init=10, random_state=42).fit_predict(sample)
+            if len(set(labels)) < 2:
+                continue
+            score = float(silhouette_score(sample, labels))
+            if score > best[1]:
+                best = (clusters, score)
+        return best
 
     @staticmethod
     def _is_identifier(frame: pd.DataFrame, column: str) -> bool:
