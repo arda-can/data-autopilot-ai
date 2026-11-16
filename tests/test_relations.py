@@ -182,3 +182,25 @@ def test_prune_plan_drops_dependent_steps(tables, relations) -> None:
 
 def test_default_base_is_the_hub_table(tables, relations) -> None:
     assert default_base(relations, list(tables)) == "orders"
+
+
+def test_null_keys_never_match() -> None:
+    """Boş müşteri kimlikleri birbirine bağlanmamalı; sağda iki boş anahtar MergeError vermemeli."""
+    orders = pd.DataFrame({
+        "order_id": [f"o{index}" for index in range(30)],
+        "customer_id": [f"c{index % 20}" for index in range(28)] + [None, None],
+    })
+    customers = pd.DataFrame({
+        "customer_id": [f"c{index}" for index in range(20)] + [None, None],
+        "customer_city": [f"şehir{index}" for index in range(20)] + ["YANLIŞ-1", "YANLIŞ-2"],
+    })
+    plan = JoinPlan(base="orders", steps=[JoinStep(
+        table="customers", left_table="orders", left_column="customer_id", right_column="customer_id",
+        mode="eşleştir", depth=1,
+    )])
+    result = apply_plan({"orders": orders, "customers": customers}, plan)
+    frame = result.frame
+    assert len(frame) == 30
+    assert frame.loc[frame["customer_id"].isna(), "customer_city"].isna().all()
+    assert not frame["customer_city"].isin(["YANLIŞ-1", "YANLIŞ-2"]).any()
+    assert result.logs[0].match_rate == pytest.approx(28 / 30, abs=1e-4)

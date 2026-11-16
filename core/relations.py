@@ -366,7 +366,10 @@ def apply_plan(tables: Mapping[str, pd.DataFrame], plan: JoinPlan) -> JoinResult
         join_key = "__birlesim_anahtari__"
         left_values = _comparable(result[left_key])
         addition[join_key] = _comparable(addition[step.right_column])
-        matched = left_values.isin(set(addition[join_key].dropna()))
+        # Boş anahtar hiçbir şeyle eşleşmez: pandas birleştirmede NA'yı NA ile eşleştirirdi ve boş kimlikli
+        # siparişlere rastgele bir müşterinin alanları yazılırdı (iki boş sağ anahtar ise MergeError verirdi).
+        addition = addition[addition[join_key].notna()]
+        matched = left_values.isin(set(addition[join_key])).fillna(False).astype(bool)
         merged = result.assign(**{join_key: left_values}).merge(
             addition.drop(columns=[step.right_column]), on=join_key, how="left", validate="many_to_one",
         ).drop(columns=[join_key])
