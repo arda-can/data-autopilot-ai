@@ -19,7 +19,7 @@ from core.executor import ActionExecutor, AuditLog, RejectedAction
 from core.formatting import decimal_tr, localize_figure
 from core.health import DataHealthAnalyzer, HealthReport, OutlierFinding
 from core.metadata import DatasetMetadataCard, MetadataGenerator
-from core.planner import STATISTICAL_ACTIONS, GeminiPlanner
+from core.planner import STATISTICAL_ACTIONS, GeminiPlanner, PlanOrigin
 from core.timeseries import TimeSeriesEngine, TimeSeriesResult, date_columns
 
 
@@ -48,6 +48,7 @@ class AutopilotResult:
     timeseries: TimeSeriesResult | None = None
     timeseries_message: str = ""
     rejected_actions: list[RejectedAction] = field(default_factory=list)
+    plan_origin: PlanOrigin | None = None
 
 
 class AutopilotEngine:
@@ -65,7 +66,8 @@ class AutopilotEngine:
 
         before_report = self.analyzer.analyze(df)
         metadata = MetadataGenerator().generate(df)
-        plan = GeminiPlanner(api_key).create_plan(df, metadata)
+        planner = GeminiPlanner(api_key)
+        plan = planner.create_plan(df, metadata)
         executor = ActionExecutor()
         # Yalnızca yapısal hijyen uygulanır. Eksik doldurma ve aykırı değer kırpma istatistikleri
         # veri sızıntısını önlemek için burada değil, modelleme hattında eğitim bölmesinden öğrenilir.
@@ -123,6 +125,7 @@ class AutopilotEngine:
             timeseries=timeseries,
             timeseries_message=timeseries_message,
             rejected_actions=executor.rejected_actions,
+            plan_origin=planner.origin,
         )
 
     def _select_charts(

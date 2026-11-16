@@ -244,6 +244,9 @@ for finding in after.category_variants:
         f"{finding.group_count} olası kategori kopyası grubu ({finding.affected_count} kayıt). "
         "Birleştirme öncesinde incelenmesi önerilir; değerler değiştirilmedi."
     )
+if result.plan_origin is not None:
+    plan_text = f"Temizlik planı: {result.plan_origin.source} — {result.plan_origin.reason}"
+    (st.warning if result.plan_origin.error else st.caption)(plan_text)
 for rejected in result.rejected_actions:
     st.warning(
         f"Plan önerisi uygulanmadı — “{rejected.column}” için {rejected.action}: {rejected.rejection} "
@@ -614,7 +617,9 @@ with st.expander("Veriyle sohbet et"):
             chat_engine = DataChatEngine(api_key)
             chat_result, summary, figure, query = chat_engine.answer(cleaned, question, result.metadata)
             st.write(f"**{summary}**")
-            st.caption(f"Yapılandırılmış işlem: `{query.operation}`")
+            st.caption(f"Yapılandırılmış işlem: `{query.operation}` · Sorgu planı: {chat_engine.origin.source}")
+            if chat_engine.origin.error:
+                st.warning(chat_engine.origin.reason)
             st.plotly_chart(figure, width="stretch")
             st.dataframe(display_frame(chat_result), width="stretch")
             query_code = chat_engine.explain(cleaned, query)

@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from core.columns import is_identifier_column, is_text_series, parse_numeric_text
 from core.formatting import decimal_tr, integer_tr, localize_figure
 from core.metadata import DatasetMetadataCard, MetadataGenerator
+from core.planner import PlanOrigin, failure_reason, request_structured
 
 Operator = Literal["==", "!=", ">", ">=", "<", "<=", "in"]
 TimeGrain = Literal["day", "week", "month", "year"]
@@ -76,6 +77,7 @@ class DataChatEngine:
     def __init__(self, api_key: str | None = None, model: str = "gemini-2.5-flash") -> None:
         self.api_key = api_key.strip() if api_key else ""
         self.model = model
+        self.origin = PlanOrigin(source="yerel kurallar", reason="Henüz soru sorulmadı.")
 
     def answer(
         self,
@@ -103,29 +105,22 @@ class DataChatEngine:
         card: DatasetMetadataCard,
         frame: pd.DataFrame,
     ) -> StructuredDataQuery:
-        if self.api_key:
-            try:
-                from google import genai
-                from google.genai import types
-
-                client = genai.Client(api_key=self.api_key)
-                response = client.models.generate_content(
-                    model=self.model,
-                    contents=self._build_prompt(question, card),
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=StructuredDataQuery,
-                    ),
-                )
-                parsed = getattr(response, "parsed", None)
-                if isinstance(parsed, StructuredDataQuery):
-                    return self._validate_columns(parsed, frame)
-                return self._validate_columns(
-                    StructuredDataQuery.model_validate_json(response.text), frame
-                )
-            except Exception:
-                pass
-        return self._fallback(question, frame)
+        if not self.api_key:
+            self.origin = PlanOrigin(source="yerel kurallar", reason="Gemini API anahtarı girilmedi.")
+            return self._fallback(question, frame)
+        try:
+            query = self._validate_columns(
+                request_structured(self.api_key, self.model, self._build_prompt(question, card), StructuredDataQuery),
+                frame,
+            )
+        except Exception as exc:  # SDK hataları ve geçersiz sütun seçen planlar
+            self.origin = PlanOrigin(
+                source="yerel kurallar", error=True,
+                reason=f"Gemini sorgu planı kullanılamadı ({failure_reason(exc)}); yerel ayrıştırıcı kullanıldı.",
+            )
+            return self._fallback(question, frame)
+        self.origin = PlanOrigin(source="Gemini", reason=f"{self.model} sorgu planı doğrulandı.")
+        return query
 
     @staticmethod
     def _build_prompt(question: str, card: DatasetMetadataCard) -> str:
