@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import os
 import zipfile
 from collections import Counter
@@ -47,6 +48,19 @@ def _read_bytes(source: Any) -> bytes:
 
 
 _TURKISH_LETTERS = set("çğıöşüÇĞİÖŞÜ")
+
+
+def content_signature(source: Any) -> str:
+    """Dosya içeriğinin özeti: aynı ad ve boyutta farklı içerik farklı imza alır (önbellek anahtarı)."""
+    return hashlib.sha256(_read_bytes(source)).hexdigest()[:20]
+
+
+def frame_signature(frame: pd.DataFrame) -> str:
+    """DataFrame içeriğinin özeti: sütun adları, tipler ve tüm değerler (ör. birleşik verinin önbellek anahtarı)."""
+    digest = hashlib.sha256()
+    digest.update(repr([(str(column), str(dtype)) for column, dtype in frame.dtypes.items()]).encode("utf-8"))
+    digest.update(pd.util.hash_pandas_object(frame, index=True).to_numpy().tobytes())
+    return digest.hexdigest()[:20]
 
 
 def detect_encoding(raw: bytes) -> str:

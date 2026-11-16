@@ -77,3 +77,15 @@ def test_app_shows_turkish_error_for_unreadable_local_file(tmp_path, monkeypatch
     app.sidebar.selectbox[0].select("bozuk.csv").run()
     assert not app.exception
     assert any(error.value.startswith("Dosya yüklenemedi: “bozuk.csv” okunamadı") for error in app.error)
+
+
+def test_signatures_follow_content_not_name_or_size() -> None:
+    from core.ingestion import content_signature, frame_signature
+
+    assert content_signature(b"a,b\n1,2\n") != content_signature(b"a,b\n1,3\n")  # aynı boyut
+    assert content_signature(b"a,b\n1,2\n") == content_signature(b"a,b\n1,2\n")
+    frame = pd.DataFrame({"x": [1, 2, 3], "y": ["a", "b", "c"]})
+    assert frame_signature(frame) == frame_signature(frame.copy())
+    assert frame_signature(frame) != frame_signature(frame.assign(y=["a", "b", "d"]))
+    assert frame_signature(frame) != frame_signature(frame.rename(columns={"y": "z"}))
+    assert frame_signature(frame) != frame_signature(frame.astype({"x": float}))

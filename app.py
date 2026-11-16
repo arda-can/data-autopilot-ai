@@ -18,6 +18,8 @@ from core.ingestion import (
     list_local_csv_files,
     read_local_csv,
     read_tabular_file,
+    content_signature,
+    frame_signature,
 )
 from core.formatting import decimal_tr, display_frame, integer_tr
 from core.report import build_report, render_html, render_pdf
@@ -52,9 +54,9 @@ def _load_dataset(load, signature: str, name: str) -> None:
 
 
 @st.cache_resource(show_spinner="Tablolar okunuyor ve ilişkiler aranıyor...")
-def _discover_tables(signature: tuple[tuple[str, int], ...]) -> tuple:
+def _discover_tables(signature: tuple[tuple[str, int, int], ...]) -> tuple:
     """`data/` klasöründeki tabloları bir kez okur; dosyalar değişince imza değişir ve yeniden okunur."""
-    tables = load_tables([Path(path) for path, _ in signature])
+    tables = load_tables([Path(item[0]) for item in signature])
     finder = RelationFinder()
     return tables, finder.describe(tables), finder.discover(tables)
 
@@ -94,11 +96,15 @@ with st.sidebar:
 
 if uploaded is not None:
     _load_dataset(
-        lambda: read_tabular_file(uploaded, uploaded.name), f"upload:{uploaded.name}:{uploaded.size}", uploaded.name
+        # Önbellek anahtarı içerikten türetilir: aynı ad ve boyutta farklı dosya eski sonuçları göstermez.
+        lambda: read_tabular_file(uploaded, uploaded.name), f"upload:{content_signature(uploaded)}", uploaded.name
     )
 elif selected != "-- Seçin --":
     path = next(path for path in files if path.name == selected)
-    _load_dataset(lambda: read_local_csv(path), f"local:{path}:{path.stat().st_mtime_ns}", path.name)
+    file_stat = path.stat()
+    _load_dataset(
+        lambda: read_local_csv(path), f"local:{path}:{file_stat.st_mtime_ns}:{file_stat.st_size}", path.name
+    )
 if st.session_state.get("load_error"):
     st.error(f"Dosya yüklenemedi: {st.session_state.load_error}")
 
@@ -109,7 +115,7 @@ if work_mode != "Tek tablo":
             st.info("Çoklu tablo için data/ klasöründe en az iki CSV gerekir.")
         else:
             tables, table_infos, relations = _discover_tables(
-                tuple((str(path), path.stat().st_mtime_ns) for path in files)
+                tuple((str(path), path.stat().st_mtime_ns, path.stat().st_size) for path in files)
             )
             st.dataframe(
                 pd.DataFrame([
@@ -165,9 +171,8 @@ if work_mode != "Tek tablo":
                             st.error(f"Birleştirme yapılamadı: {exc}")
                         else:
                             st.session_state.dataframe = joined.frame
-                            st.session_state.data_signature = (
-                                f"join:{join_base}:{'+'.join(step.table for step in valid_plan.steps)}"
-                            )
+                            # İmza birleşik verinin içeriğinden: plan veya kaynak dosyalar değişirse önbellek yenilenir.
+                            st.session_state.data_signature = f"join:{frame_signature(joined.frame)}"
                             st.session_state.data_name = f"birlesik_{join_base}.csv"
                             st.session_state.join_logs = joined.logs
                             st.session_state.autopilot_result = None
@@ -380,7 +385,7 @@ else:
         "Karşılaştırılacak dosya (CSV veya Excel)", type=["csv", "xlsx"], key="drift_file"
     )
     if drift_upload is not None:
-        drift_request = ("file", drift_upload.name, drift_upload.size)
+        drift_request = ("file", drift_upload.name, content_signature(drift_upload))
 
 if drift_request is not None and st.button("Karşılaştır", key="drift_button"):
     with st.spinner("Dönemler karşılaştırılıyor..."):
