@@ -7,10 +7,11 @@ from pathlib import Path
 
 import streamlit as st
 
+from core.experiment import ExperimentSpec
 from core.report import build_report, render_html, render_pdf
 from views.common import (
     automl_for, automl_selection, explanation_for, joined_active, remembered, require_result, rule_evaluation,
-    stored_drift, stored_root_cause, customer_analysis_for, customer_request, timeseries_for, timeseries_request,
+    stored_drift, stored_experiment, stored_root_cause, customer_analysis_for, customer_request, timeseries_for, timeseries_request,
 )
 
 result = require_result()
@@ -36,6 +37,11 @@ customer_summary = None if customer_outcome is None or isinstance(customer_outco
 root_request = remembered("rc_request")
 root_outcome = stored_root_cause(root_request)
 root_report = None if root_outcome is None or isinstance(root_outcome, str) else root_outcome.report
+experiment_spec = remembered("experiment_spec")
+experiment_outcome = stored_experiment(None if experiment_spec is None else ExperimentSpec(**experiment_spec))
+experiment_report = (
+    None if experiment_outcome is None or isinstance(experiment_outcome, str) else experiment_outcome.report
+)
 
 included = [
     f"zaman serisi: {timeseries.summary.date_column} ({timeseries.summary.frequency_label})"
@@ -47,12 +53,13 @@ included = [
     "müşteri analizi: var" if customer_summary is not None else "müşteri analizi: yok",
     "neden değişti: var" if root_report is not None else
     "neden değişti: yok (Zaman Serisi sayfasında “Değişimi ayrıştır” ile eklenir)",
+    "A/B testi: var" if experiment_report is not None else "A/B testi: yok (Deney sayfasında “Deneyi analiz et” ile eklenir)",
 ]
 st.caption("Rapora girecekler — " + " · ".join(included))
 
 rule_keys = () if rule_report is None else tuple(item.rule.key for item in rule_report.results)
 report_key = (st.session_state.data_signature, target, ts_request, settings, str(drift_request), rule_keys, customer_req,
-              str(root_request))
+              str(root_request), str(experiment_spec))
 if st.button("Raporu Hazırla", key="report_button"):
     with st.spinner("Rapor hazırlanıyor..."):
         explanation = explanation_for(target, settings, automl)
@@ -77,6 +84,7 @@ if st.button("Raporu Hazırla", key="report_button"):
             rules=rule_report,
             customers=customer_summary,
             root_cause=root_report,
+            experiment=experiment_report,
         )
         chart_figures = [chart.figure for chart in result.charts]
         st.session_state.report_files = {

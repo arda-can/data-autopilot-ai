@@ -12,6 +12,7 @@ Bir CSV veya Excel dosyası verin; veriyi temizlesin, en anlamlı grafikleri se�
 - **Kalite iki ayrı ölçü.** Yapısal hijyen skoru biçimi (boşluk, tekrar, tip) ölçer; iş kuralı uyumu ise tanımladığınız kurallara (aralık, benzersiz, boş olamaz, izinli değerler, desen, iki sütun karşılaştırması) uyan kayıtların oranıdır. Kurallar veriden önerilir ya da elle eklenir, JSON olarak kaydedilir; ihlal eden kayıtlar indirilebilir.
 - **Müşteri analizi.** RFM segmentleri (önerilen aksiyonlarla), kohort tutundurma ısı haritası ve edinimden sonraki 3/6/12 ayda müşteri başına tarihsel gelir; tanımlar ve zaman penceresi ekranda yazılı.
 - **Neden değişti?** Bir metriğin (sayım, toplam, ortalama, oran) iki dönem arasındaki değişimi boyut değerlerinin katkılarına tam olarak ayrıştırılır; ortalamalarda karma etkisi ile grup içi değişim ayrı gösterilir. Demo veride Q4 2025'teki puan düşüşünün kaynağı Ankara olarak bulunur.
+- **A/B testi.** Oran (z-testi) ya da ortalama (Welch) karşılaştırması, fark ve göreli artış için güven aralığı, örneklem oranı uyumu (SRM) alarmı, yakalanabilir en küçük fark ve gereken örneklem. Atama müşteri bazındaysa analiz müşteri düzeyinde yapılır.
 - **Her değişiklik kayıtlı.** Hangi sütuna ne yapıldığı ve kaç satırın etkilendiği audit log'da görünür.
 - **Modeller bir taban çizgisiyle kıyaslanır.** Hiçbir özelliğe bakmayan taban modeli geçemeyen sonuç, "tahmin edilemiyor" olarak açıkça bildirilir.
 - **Zaman serisi otopilotu.** Tarih sütunu bulununca trend, haftalık/yıllık döngü, olağan dışı dönemler ve %80 aralıklı tahmin; model, naif tahmine karşı geriye dönük test edilir ve geçemezse bunu söyler.
@@ -59,13 +60,14 @@ Testler API anahtarı kullanmaz: kurallı yerel planlayıcı, maskeleme ve LLM'e
 
 ```
 app.py               Streamlit giriş noktası: veri kaynağı ve sayfa gezintisi
-views/               Sayfalar: Genel Bakış, Kalite, Zaman Serisi, Model, Müşteri, Rapor (yalnızca sunum)
+views/               Sayfalar: Genel Bakış, Kalite, Zaman Serisi, Model, Müşteri, Deney, Rapor (yalnızca sunum)
 core/ingestion.py    Dosya okuma, encoding ve ayraç tespiti
 core/columns.py      Sütun tipi çıkarımı: metin, sayı, tarih, kimlik
 core/health.py       Yapısal hijyen skoru ve aykırı değer raporu
 core/rules.py        Veri kuralları ve iş kuralı uyumu
 core/customers.py    RFM, kohort tutundurma, tarihsel müşteri değeri
 core/rootcause.py    "Neden değişti?" katkı ayrıştırması
+core/experiment.py   A/B testi, SRM, güç ve örneklem
 core/metadata.py     PII maskeli metadata kartı
 core/planner.py      Gemini planlayıcı + kurallı fallback
 core/executor.py     Deterministik dönüşümler ve audit log

@@ -161,6 +161,15 @@ def stored_root_cause(request: tuple | None):
     return None
 
 
+def stored_experiment(spec):
+    """Bu veri ve bu deney tanımı için yapılmış analiz (sonuç ya da hata metni); yoksa None."""
+    stored = st.session_state.get("experiment_result")
+    if spec is not None and stored and stored[0] == st.session_state.data_signature \
+            and stored[1] == spec.model_dump_json():
+        return stored[2]
+    return None
+
+
 # --- İş kuralları -------------------------------------------------------------------------------
 
 def rule_id(rule: DataRule) -> str:

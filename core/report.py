@@ -24,6 +24,7 @@ from core.formatting import decimal_tr, integer_tr, localize_figure
 from core.timeseries import TimeSeriesSummary, format_period
 from core.customers import CustomerSummary
 from core.drift import DriftReport
+from core.experiment import ExperimentReport
 from core.rootcause import RootCauseReport
 from core.rules import RuleReport
 from core.executor import RejectedAction
@@ -110,6 +111,7 @@ class ExecutiveReport(BaseModel):
     rules: RuleReport | None = None
     customers: CustomerSummary | None = None
     root_cause: RootCauseReport | None = None
+    experiment: ExperimentReport | None = None
     pdp: list[PartialDependence] = Field(default_factory=list)
     join_logs: list[JoinLog] = Field(default_factory=list)
     plan_origin: PlanOrigin | None = None
@@ -198,6 +200,7 @@ def build_report(
     rules: RuleReport | None = None,
     customers: CustomerSummary | None = None,
     root_cause: RootCauseReport | None = None,
+    experiment: ExperimentReport | None = None,
 ) -> ExecutiveReport:
     """Otopilot sonucundan JSON'a çevrilebilir, sunuma hazır yönetici raporu üretir."""
     before, after = result.before_report, result.after_report
@@ -248,6 +251,8 @@ def build_report(
         )
     if root_cause is not None:
         headline.append(root_cause.headline)
+    if experiment is not None:
+        headline.append(f"A/B testi ({experiment.metric_label}): {experiment.verdict}")
     headline.append(model.verdict if model else (result.automl_message or "Tahmin modeli eğitilmedi."))
     if model and model.leakage_warnings:
         headline.append(
@@ -372,6 +377,7 @@ def build_report(
         rules=rules,
         customers=customers,
         root_cause=root_cause,
+        experiment=experiment,
         pdp=list(explanation.curves) if explanation is not None else [],
         join_logs=list(join_logs or []),
         plan_origin=result.plan_origin,
@@ -504,6 +510,32 @@ def _tables(report: ExecutiveReport) -> dict[str, tuple[list[str], list[list[str
               _num(round(item.contribution, 3)), _pct(item.share_of_change),
               _pct(item.expected / cause.change) if cause.change else "—"]
              for item in cause.dimensions[0].groups[:10]],
+        )
+    if report.experiment is not None:
+        test = report.experiment
+        scale, unit = (100, " puan") if test.spec.metric_kind == "oran" else (1, "")
+        tables["experiment"] = (
+            ["Grup", "Birim", "Ortalama", "Güven aralığı"],
+            [[f"{group.label} ({role})", _int(group.units), _num(round(group.mean * scale, 3)),
+              f"{_num(round(group.ci_low * scale, 3))} – {_num(round(group.ci_high * scale, 3))}"]
+             for group, role in ((test.control, "kontrol"), (test.treatment, "deney"))],
+        )
+        tables["experiment_facts"] = (
+            ["Ölçü", "Değer"],
+            [
+                ["Fark (deney − kontrol)", f"{_num(round(test.difference * scale, 3))}{unit} "
+                                          f"(GA {_num(round(test.ci_low * scale, 3))} – {_num(round(test.ci_high * scale, 3))})"],
+                ["Göreli fark", "—" if test.relative_lift is None else _pct(test.relative_lift)],
+                ["p-değeri", "< 0,001" if test.p_value < 0.001 else _dec(test.p_value, 3)],
+                ["Test", f"{test.test_name}; analiz birimi: {test.analysis_unit}"],
+                ["SRM", f"kontrol payı {_pct(test.srm.observed_control_share)} (beklenen "
+                        f"{_pct(test.srm.expected_control_share)}), p = {_dec(test.srm.p_value, 4)}"
+                        + (" — ALARM" if test.srm.alarm else "")],
+                ["Yakalanabilir en küçük fark", "—" if test.power.detectable_relative is None
+                 else f"{_pct(test.power.detectable_relative)} (güç {_pct(test.power.power_target)})"],
+                [f"{_pct(test.power.mde_relative)} fark için grup başına örneklem",
+                 "—" if test.power.required_per_group is None else _int(test.power.required_per_group)],
+            ],
         )
     if report.drift and report.drift.columns:
         changed = [item for item in report.drift.columns if item.status != "yeşil"] or report.drift.columns[:5]
@@ -654,6 +686,17 @@ def render_html(
                          + _html_table(*tables["root_groups"]))
         parts.extend(f'<p class="note" style="margin-top:8px">{escape(item)}</p>'
                      for item in [*cause.skipped, cause.method_note])
+        parts.append("</section>")
+
+    if report.experiment is not None:
+        test = report.experiment
+        verdict_class = "verdict" if test.srm.alarm or not test.significant else "verdict good"
+        parts.append("<section><h2>A/B Testi</h2>")
+        parts.append(f'<p class="{verdict_class}">{escape(test.verdict)}</p>')
+        parts.append(_html_table(*tables["experiment"]))
+        parts.append('<div style="margin-top:12px">' + _html_table(*tables["experiment_facts"]) + "</div>")
+        parts.extend(f'<p class="note" style="margin-top:8px">{escape(item)}</p>'
+                     for item in [*test.notes, test.method_note])
         parts.append("</section>")
 
     if report.customers is not None:
@@ -944,6 +987,16 @@ def render_pdf(
                 table(*tables["root_groups"], widths=[0.24, 0.14, 0.14, 0.16, 0.16, 0.16]),
             ]
         story += [para(item, note) for item in [*cause.skipped, cause.method_note]]
+
+    if report.experiment is not None:
+        test = report.experiment
+        story += [
+            para("A/B Testi", h2), para(test.verdict),
+            table(*tables["experiment"], widths=[0.30, 0.16, 0.22, 0.32]),
+            Spacer(1, 6),
+            table(*tables["experiment_facts"], widths=[0.36, 0.64]),
+            *[para(item, note) for item in [*test.notes, test.method_note]],
+        ]
 
     if report.customers is not None:
         story += [para("Müşteri Analizi", h2), *bullets(_customer_facts(report.customers)),
