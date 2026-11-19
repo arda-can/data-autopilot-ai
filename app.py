@@ -27,6 +27,7 @@ PAGES = [
     st.Page("views/kalite.py", title="Kalite", icon="🧹"),
     st.Page("views/zaman_serisi.py", title="Zaman Serisi", icon="📈"),
     st.Page("views/model.py", title="Model", icon="🤖"),
+    st.Page("views/musteri.py", title="Müşteri", icon="👥"),
     st.Page("views/rapor.py", title="Rapor", icon="📄"),
 ]
 navigation = st.navigation(PAGES)

@@ -22,6 +22,7 @@ from core.autopilot import AutopilotResult
 from core.health import LOG_METHOD, OutlierFinding
 from core.formatting import decimal_tr, integer_tr, localize_figure
 from core.timeseries import TimeSeriesSummary, format_period
+from core.customers import CustomerSummary
 from core.drift import DriftReport
 from core.rules import RuleReport
 from core.executor import RejectedAction
@@ -106,6 +107,7 @@ class ExecutiveReport(BaseModel):
     timeseries_message: str = ""
     drift: DriftReport | None = None
     rules: RuleReport | None = None
+    customers: CustomerSummary | None = None
     pdp: list[PartialDependence] = Field(default_factory=list)
     join_logs: list[JoinLog] = Field(default_factory=list)
     plan_origin: PlanOrigin | None = None
@@ -192,6 +194,7 @@ def build_report(
     explanation: ModelExplanation | None = None,
     join_logs: list[JoinLog] | None = None,
     rules: RuleReport | None = None,
+    customers: CustomerSummary | None = None,
 ) -> ExecutiveReport:
     """Otopilot sonucundan JSON'a çevrilebilir, sunuma hazır yönetici raporu üretir."""
     before, after = result.before_report, result.after_report
@@ -225,6 +228,12 @@ def build_report(
         headline.append(
             f"İş kuralı uyumu %{_dec(rules.compliance_score)}: {len(rules.applied)} kuraldan en az birini ihlal eden "
             f"{_int(rules.violating_rows)} kayıt var (değerler değiştirilmedi)."
+        )
+    if customers is not None and customers.segments:
+        top = max(customers.segments, key=lambda item: item.revenue_share)
+        headline.append(
+            f"{_int(customers.customers)} müşterinin {_pct(customers.repeat_customer_share)}'i birden fazla işlem yaptı; "
+            f"gelirin en büyük payı ({_pct(top.revenue_share)}) “{top.segment}” segmentinde."
         )
     timeseries = result.timeseries.summary if result.timeseries is not None else None
     if timeseries is not None:
@@ -260,6 +269,14 @@ def build_report(
                 f"Kural ihlali: {item.description} — {_int(item.violations)} kayıt uymuyor. "
                 "İhlal eden kayıtlar uygulamadan indirilip kaynağında düzeltilmeli."
             )
+    if customers is not None:
+        for name in ("Kaybedilmemeli", "Risk altında"):
+            segment = next((item for item in customers.segments if item.segment == name), None)
+            if segment is not None and segment.revenue_share >= 0.05:
+                recommendations.append(
+                    f"“{name}” segmentinde {_int(segment.customers)} müşteri gelirin {_pct(segment.revenue_share)}'ini "
+                    f"oluşturuyor (ortalama {_dec(segment.recency_days, 0)} gündür işlem yok). {segment.action}"
+                )
     if before.mükerrer_satır_sayısı:
         recommendations.append(
             f"{_int(before.mükerrer_satır_sayısı)} mükerrer kayıt bulundu ve kaldırıldı; "
@@ -348,6 +365,7 @@ def build_report(
         timeseries_message=result.timeseries_message,
         drift=drift,
         rules=rules,
+        customers=customers,
         pdp=list(explanation.curves) if explanation is not None else [],
         join_logs=list(join_logs or []),
         plan_origin=result.plan_origin,
@@ -392,6 +410,19 @@ def _timeseries_facts(series: TimeSeriesSummary) -> list[tuple[str, str]]:
         ("Tarih sütunu", series.date_column), ("Ölçü", series.value_label),
         ("Frekans", series.frequency_label), ("Dönem", period), ("Model", series.model_name),
     ]
+
+
+def _customer_facts(customers: CustomerSummary) -> list[str]:
+    facts = [
+        f"{_int(customers.customers)} müşteri, {_int(customers.transactions)} işlem; tekrar eden müşteri payı "
+        f"{_pct(customers.repeat_customer_share)}. Sütunlar: müşteri “{customers.columns.customer}”, tarih "
+        f"“{customers.columns.date}”, tutar “{customers.columns.amount}”.",
+        f"RFM penceresi: {customers.window_label} ({customers.window_start} – {customers.analysis_date}).",
+    ]
+    if customers.retention:
+        facts.append("Ortalama tutundurma: " + ", ".join(
+            f"{month}. ay {_pct(value)}" for month, value in customers.retention.items()) + ".")
+    return facts
 
 
 def _kpis(report: ExecutiveReport) -> list[tuple[str, str, str]]:
@@ -439,6 +470,19 @@ def _tables(report: ExecutiveReport) -> dict[str, tuple[list[str], list[list[str
             [[item.description, item.rule.source, _int(item.checked), _int(item.violations),
               _pct(item.compliance) if item.compliance is not None else (item.error or "—")]
              for item in report.rules.results[:30]],
+        )
+    if report.customers is not None:
+        tables["segments"] = (
+            ["Segment", "Müşteri", "Müşteri payı", "Gelir payı", "Ort. yakınlık (gün)", "Ort. sıklık"],
+            [[item.segment, _int(item.customers), _pct(item.customer_share), _pct(item.revenue_share),
+              _dec(item.recency_days, 0), _dec(item.frequency, 2)] for item in report.customers.segments],
+        )
+        tables["clv"] = (
+            ["Edinimden sonraki ay", "Gözlenen müşteri", "Müşteri başına gelir", "Müşteri başına işlem"],
+            [[str(row.horizon_months), _int(row.customers),
+              "—" if row.revenue_per_customer is None else _num(round(row.revenue_per_customer, 2)),
+              "—" if row.orders_per_customer is None else _dec(row.orders_per_customer, 2)]
+             for row in report.customers.clv],
         )
     if report.drift and report.drift.columns:
         changed = [item for item in report.drift.columns if item.status != "yeşil"] or report.drift.columns[:5]
@@ -578,6 +622,15 @@ def render_html(
         parts.append("<section><h2>İş Kuralı Uyumu</h2>")
         parts.append(_html_table(*tables["rules"]))
         parts.append(f'<p class="note" style="margin-top:8px">{escape(report.rules.method_note)}</p></section>')
+
+    if report.customers is not None:
+        parts.append("<section><h2>Müşteri Analizi</h2>")
+        parts.append(_html_list(_customer_facts(report.customers)))
+        parts.append('<h3 style="margin-top:16px">RFM segmentleri</h3>' + _html_table(*tables["segments"]))
+        parts.append('<h3 style="margin-top:16px">Tarihsel müşteri değeri</h3>' + _html_table(*tables["clv"]))
+        parts.extend(f'<p class="note" style="margin-top:8px">{escape(item)}</p>'
+                     for item in [*report.customers.definitions.values(), *report.customers.notes])
+        parts.append("</section>")
 
     if report.drift:
         drift = report.drift
@@ -847,6 +900,12 @@ def render_pdf(
             table(*tables["rules"], widths=[0.52, 0.12, 0.12, 0.12, 0.12]),
             para(report.rules.method_note, note),
         ]
+
+    if report.customers is not None:
+        story += [para("Müşteri Analizi", h2), *bullets(_customer_facts(report.customers)),
+                  para("RFM segmentleri", h3), table(*tables["segments"], widths=[0.26, 0.13, 0.15, 0.15, 0.17, 0.14]),
+                  para("Tarihsel müşteri değeri", h3), table(*tables["clv"], widths=[0.25, 0.25, 0.25, 0.25])]
+        story += [para(item, note) for item in [*report.customers.definitions.values(), *report.customers.notes]]
 
     if report.drift:
         drift = report.drift

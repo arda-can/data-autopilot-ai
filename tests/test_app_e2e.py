@@ -242,3 +242,26 @@ def test_business_rules_on_quality_page(monkeypatch: pytest.MonkeyPatch, tmp_pat
     page = application.session_state["report_files"]["html"].decode("utf-8")
     assert "<h2>İş Kuralı Uyumu</h2>" in page and "“kanal” yalnızca" in page
     assert "“tutar” en az 0 olmalı" not in page  # onayı kaldırılan öneri rapora girmez
+
+
+def test_customer_page_and_report(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("AUTOPILOT_DATA_DIR", str(tmp_path))
+    application = AppTest.from_file(str(ROOT / "app.py"), default_timeout=TIMEOUT)
+    application.run()
+    application.sidebar.button(key="demo_button").click().run()
+    application.switch_page("views/musteri.py").run()
+    _ok(application)
+    metrics = {item.label: item.value for item in application.metric}
+    assert metrics["Müşteri"] == "3.996" and metrics["Tekrar Eden Müşteri"].startswith("%40")
+    assert application.selectbox(key="cust_customer").value == "müşteri_no"
+    application.selectbox(key="cust_window").select("Son 6 ay").run()
+    application.selectbox(key="cust_group").select("kanal").run()
+    _ok(application)
+    assert any("İlk işlemdeki “kanal” değerine göre" in item.value for item in application.markdown)
+    application.switch_page(RAPOR).run()
+    _ok(application)
+    assert any("müşteri analizi: var" in item.value for item in application.caption)
+    application.button(key="report_button").click().run()
+    _ok(application)
+    page = application.session_state["report_files"]["html"].decode("utf-8")
+    assert "<h2>Müşteri Analizi</h2>" in page and "RFM penceresi: Son 6 ay" in page

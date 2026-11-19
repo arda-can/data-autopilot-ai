@@ -18,6 +18,7 @@ import streamlit as st
 
 from core.autopilot import AutopilotEngine, AutopilotResult
 from core.automl import AutoMLEngine
+from core.customers import CustomerAnalysis, CustomerAnalyzer, CustomerColumns, detect_customer_columns
 from core.explain import ModelExplainer
 from core.relations import RelationFinder, load_tables
 from core.rules import DataRule, RuleReport, evaluate_rules, suggest_rules
@@ -203,6 +204,38 @@ def rule_evaluation(result: AutopilotResult) -> tuple[RuleReport | None, pd.Data
     if key not in cache:
         cache.clear()  # yalnızca son değerlendirme tutulur; ihlal matrisi veri boyutundadır
         cache[key] = evaluate_rules(result.cleaned_frame, rules)
+    return cache[key]
+
+
+# --- Müşteri analizi ----------------------------------------------------------------------------
+
+def default_customer_request(result: AutopilotResult) -> tuple | None:
+    columns = detect_customer_columns(result.cleaned_frame)
+    if columns is None:
+        return None
+    return (columns.customer, columns.date, columns.amount, columns.order, "Tüm veri", None)
+
+
+def customer_request(result: AutopilotResult) -> tuple | None:
+    """(müşteri, tarih, tutar, sipariş, pencere, kırılım); Müşteri sayfası açılmadıysa otomatik bulunan sütunlar."""
+    return remembered("customer_request", default_customer_request(result))
+
+
+def customer_analysis_for(result: AutopilotResult, request: tuple | None) -> CustomerAnalysis | str | None:
+    """Analiz, Türkçe hata metni ya da (uygun sütun yoksa) None. Aynı istek için bir kez hesaplanır."""
+    if request is None:
+        return None
+    cache = st.session_state.setdefault("customer_cache", {})
+    key = (st.session_state.data_signature, *request)
+    if key not in cache:
+        customer, date, amount, order, window, group = request
+        try:
+            cache[key] = CustomerAnalyzer().analyze(
+                result.cleaned_frame, CustomerColumns(customer=customer, date=date, amount=amount, order=order),
+                window_label=window, group_column=group,
+            )
+        except ValueError as exc:
+            cache[key] = f"Müşteri analizi yapılamadı: {exc}"
     return cache[key]
 
 
