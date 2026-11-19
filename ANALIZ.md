@@ -96,10 +96,23 @@ flowchart TD
 - Gösterilen SQL PostgreSQL söz dizimidir; tarih ve medyan dışındaki işlemler testte SQLite'ta pandas ile karşılaştırılır.
 - Gemini yolu gerçek anahtarla doğrulanmadı.
 
-**Sıradaki adaylar** (veri analisti işvereni gözüyle):
+**Onaylı iş planı** (19 Kasım 2026; veri analisti işvereni gözüyle, sırayla):
 
 | Sıra | İş | Neden | Efor |
 |---|---|---|---|
+| 0 | Arayüzü sayfalara bölmek (Genel Bakış, Kalite, Zaman Serisi, Model, Müşteri, Deney, Rapor) | `app.py` 800+ satır; yeni özellikler kendi sayfasına oturur, demo düzenli görünür | M |
+| 1 | Sentetik demo veri seti (öğrenilebilir örüntü, PII, kural ihlali, aylar arası kayma, tekrar eden müşteri, deney grubu) | Sonraki her özelliğin vitrini ve testi; D2'yi kapatır | S |
+| 2 | Kullanıcı tanımlı veri kuralları; kalite ekranı "yapısal hijyen" ve "iş kuralı uyumu" olarak ikiye ayrılır, ihlaller indirilebilir | "Kalite 100" iddiasını dürüst kılar; O1 ve O6'yı kapatır | M |
+| 3 | RFM segmentasyonu, kohort tutundurma ve CLV | Olist demosunu e-ticaret analizi hikâyesine çevirir | M |
+| 4 | "Neden değişti?" kök neden: metrik değişimini boyut katkılarına ayırma | Analistin günlük sorusu; drift altyapısını kullanır | S–M |
+| 5 | A/B test analizi: oran/ortalama testi, güven aralığı, güç ve örneklem, SRM kontrolü | İlanlarda en ayırt edici beceri | M |
+| 6 | Yayın: README'ye demo GIF'i, Streamlit Community Cloud, video senaryosu | İşverenin depoyu klonlamadan görebileceği tek şey | S |
+
+Tasarım kısıtları: veri kuralları serbest ifade metni değil sınırlı tiplerdir (aralık, benzersiz, boş olamaz, izinli değerler, desen, iki sütun karşılaştırması); `eval` yoktur, LLM yalnızca bu şemayla kural önerir.
+
+**Ertelenen adaylar:** DuckDB'de SQL çalıştırma (gösterilen SQL'in çalıştırılmaması kuralını değiştirir), analiz tarifleri, KPI paneli, analiz geçmişi, veri sözlüğü ve BI dışa aktarımı, yeni dosyaya toplu tahmin, otomatik izleme, veritabanı bağlantısı, metrik adlarının Türkçeleştirilmesi (D1), Python API ve CLI (Ek A, 4.6), Word raporu.
+
+---|---|---|---|
 | 1 | README'ye demo GIF'i ve Streamlit Community Cloud yayını | İşverenin depoyu klonlamadan görebileceği tek şey | S |
 | 2 | Metrik ve tablo başlıklarının tamamen Türkçeleştirilmesi (D1) | Arayüz kuralı; demoda göze batıyor | S |
 | 3 | Kullanıcı tanımlı alan kuralları (O1) ve kaliteyi doğruluğa bağlayan skor (O6) | "Kalite 100" iddiasını anlamlı kılar | M |
