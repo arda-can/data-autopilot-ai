@@ -16,13 +16,14 @@ Bir CSV/Excel dosyası ya da `data/` klasöründeki birbirine bağlı tablolar v
 - Türkçe sorulara filtre ve tarih kırılımıyla cevap verir, her cevabın eşdeğer pandas ve SQL kodunu gösterir;
 - bunların tümünü HTML ve PDF yönetici raporuna koyar.
 
-**Test ve CI:** 300 test (pytest), bunların dördü Streamlit AppTest ile uçtan uca arayüz testi. GitHub Actions her push'ta Python 3.13 ile çalıştırır. Bağımlılık sürümleri `requirements.txt` içinde sabit.
+**Test ve CI:** 301 test (pytest), bunların beşi Streamlit AppTest ile uçtan uca arayüz testi (`tests/test_app_e2e.py`). GitHub Actions her push'ta Python 3.13 ile çalıştırır. Bağımlılık sürümleri `requirements.txt` içinde sabit.
 
 ## 2. Güncel mimari
 
 | Modül | Sorumluluk |
 |---|---|
-| `app.py` | Streamlit arayüzü; yalnızca sunum ve önbellek (anahtarlar içerik özetinden) |
+| `app.py` | Streamlit giriş noktası: veri kaynağı, ortak oturum durumu, sayfa gezintisi (`st.navigation`) |
+| `views/` | Sayfalar (Genel Bakış, Kalite, Zaman Serisi, Model, Rapor); `views/common.py` sayfalar arası hatırlanan seçimler ve içerik özetli önbellekler |
 | `core/ingestion.py` | Okuma: kodlama, tırnak duyarlı ayraç, baştaki sıfırlar, Türkçe okuma hataları, içerik imzaları |
 | `core/columns.py` | Sütun tipi çıkarımı: metin, sayı, tarih, kimlik |
 | `core/health.py` | Kalite skoru, aykırı değer (log ölçekli IQR dahil), alan kuralı ve kategori kopyası bulguları |
@@ -69,7 +70,7 @@ flowchart TD
 | Y2 — pandas 3 dtype, sürümsüz bağımlılıklar | ✅ | `is_text_series`; sürümler sabit |
 | Y3 — "id" alt dizesi | ✅ | `is_identifier_name`, kelime eşleşmesi |
 | Y4 — LLM planına korkuluk ve hata görünürlüğü | ◐ | JSON yolu düzeltildi, hatalar ve plan kaynağı görünür, veri koruma kontrolü var; Gemini gerçek anahtarla test edilmedi (sahte SDK testleri var) |
-| Y5 — test, git, README, CI | ✅ | 300 test, GitHub Actions |
+| Y5 — test, git, README, CI | ✅ | 301 test, GitHub Actions |
 | Y6 — yanıltıcı AutoML sonuçları | ✅ | Taban model, çapraz doğrulamayla seçim, ayrı test, zaman bölmesi, tahmin anı, sızıntı uyarısı |
 | O1 — alan kuralları | ◐ | Negatif olamayan ölçüler ve kategori kopyaları raporlanıyor; kullanıcı tanımlı kural yok |
 | O2 — audit örnekleri | ✅ | Değişen satırlardan, satır numaralarıyla |
@@ -100,7 +101,7 @@ flowchart TD
 
 | Sıra | İş | Neden | Efor |
 |---|---|---|---|
-| 0 | Arayüzü sayfalara bölmek (Genel Bakış, Kalite, Zaman Serisi, Model, Müşteri, Deney, Rapor) | `app.py` 800+ satır; yeni özellikler kendi sayfasına oturur, demo düzenli görünür | M |
+| 0 | ✅ Arayüzü sayfalara bölmek (Genel Bakış, Kalite, Zaman Serisi, Model, Rapor; Müşteri ve Deney sayfaları 3. ve 5. adımla eklenir) | `app.py` 800+ satır; yeni özellikler kendi sayfasına oturur, demo düzenli görünür | M |
 | 1 | Sentetik demo veri seti (öğrenilebilir örüntü, PII, kural ihlali, aylar arası kayma, tekrar eden müşteri, deney grubu) | Sonraki her özelliğin vitrini ve testi; D2'yi kapatır | S |
 | 2 | Kullanıcı tanımlı veri kuralları; kalite ekranı "yapısal hijyen" ve "iş kuralı uyumu" olarak ikiye ayrılır, ihlaller indirilebilir | "Kalite 100" iddiasını dürüst kılar; O1 ve O6'yı kapatır | M |
 | 3 | RFM segmentasyonu, kohort tutundurma ve CLV | Olist demosunu e-ticaret analizi hikâyesine çevirir | M |
@@ -111,13 +112,6 @@ flowchart TD
 Tasarım kısıtları: veri kuralları serbest ifade metni değil sınırlı tiplerdir (aralık, benzersiz, boş olamaz, izinli değerler, desen, iki sütun karşılaştırması); `eval` yoktur, LLM yalnızca bu şemayla kural önerir.
 
 **Ertelenen adaylar:** DuckDB'de SQL çalıştırma (gösterilen SQL'in çalıştırılmaması kuralını değiştirir), analiz tarifleri, KPI paneli, analiz geçmişi, veri sözlüğü ve BI dışa aktarımı, yeni dosyaya toplu tahmin, otomatik izleme, veritabanı bağlantısı, metrik adlarının Türkçeleştirilmesi (D1), Python API ve CLI (Ek A, 4.6), Word raporu.
-
----|---|---|---|
-| 1 | README'ye demo GIF'i ve Streamlit Community Cloud yayını | İşverenin depoyu klonlamadan görebileceği tek şey | S |
-| 2 | Metrik ve tablo başlıklarının tamamen Türkçeleştirilmesi (D1) | Arayüz kuralı; demoda göze batıyor | S |
-| 3 | Kullanıcı tanımlı alan kuralları (O1) ve kaliteyi doğruluğa bağlayan skor (O6) | "Kalite 100" iddiasını anlamlı kılar | M |
-| 4 | Temiz Python API ve CLI (Ek A, 4.6) | Raporu ve ileride sesli asistanı aynı çekirdeğe bağlar | M |
-| 5 | Word raporu | PDF varken düşük öncelik | M |
 
 ---
 

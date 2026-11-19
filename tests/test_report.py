@@ -95,6 +95,7 @@ def test_app_builds_report_downloads() -> None:
     app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=180)
     app.run()
     app.sidebar.selectbox[0].select("kirli_musteri_verisi.csv").run()
+    app.switch_page("views/rapor.py").run()
     app.button(key="report_button").click().run()
     assert not app.exception and not app.error
     files = app.session_state["report_files"]

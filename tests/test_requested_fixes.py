@@ -151,9 +151,10 @@ def test_pdf_graph_limit_and_skipped_types(monkeypatch, dirty_result) -> None:
 
 
 def test_app_uses_new_width_parameter() -> None:
-    source = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert "use_container_width" not in source
-    assert 'width="stretch"' in source
+    sources = [ROOT / "app.py", *sorted((ROOT / "views").glob("*.py"))]
+    text = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+    assert "use_container_width" not in text
+    assert 'width="stretch"' in text
 
 
 def test_kaleido_failure_is_logged_and_noted_in_pdf(monkeypatch, caplog, dirty_result) -> None:

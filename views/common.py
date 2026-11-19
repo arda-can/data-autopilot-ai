@@ -1,0 +1,191 @@
+"""Sayfaların paylaştığı oturum durumu, hatırlanan seçimler ve önbellekli hesaplar.
+
+Streamlit bir sayfada çizilmeyen widget'ların durumunu siler. Sayfalar arasında kaybolmaması gereken
+seçimler (zaman serisi ölçüsü, hedef sütun, tahmin anı ayarları…) bu yüzden ayrı bir anahtarda
+hatırlanır ve widget yeniden çizilirken varsayılan değer olarak verilir. Veri değişince hepsi unutulur.
+
+Bir sonucu etkileyen her seçim önbellek anahtarına girer; anahtarın ilk öğesi her zaman veri imzasıdır.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import streamlit as st
+
+from core.autopilot import AutopilotEngine, AutopilotResult
+from core.automl import AutoMLEngine
+from core.explain import ModelExplainer
+from core.relations import RelationFinder, load_tables
+from core.timeseries import TimeSeriesEngine, date_columns
+
+MEMORY_PREFIX = "_hatirla_"
+NO_TARGET = "-- Hedef seçin --"
+DEFAULT_AUTOML_SETTINGS: tuple = (None, (), ())
+SINGLE_TABLE = "Tek tablo"
+
+
+def init_state() -> None:
+    for key, value in (
+        ("dataframe", None), ("autopilot_result", None), ("data_signature", None), ("data_name", "veri"),
+    ):
+        st.session_state.setdefault(key, value)
+
+
+def remembered(key: str, default: Any = None) -> Any:
+    return st.session_state.get(MEMORY_PREFIX + key, default)
+
+
+def remember(key: str, value: Any) -> None:
+    st.session_state[MEMORY_PREFIX + key] = value
+
+
+def forget_selections() -> None:
+    """Yeni veri yüklenince önceki verinin seçimleri yeni veriye taşınmaz."""
+    for key in [key for key in st.session_state if str(key).startswith(MEMORY_PREFIX)]:
+        del st.session_state[key]
+
+
+def index_of(options: list, value: Any, default: int = 0) -> int:
+    return options.index(value) if value in options else default
+
+
+def set_dataset(frame, signature: str, name: str) -> None:
+    st.session_state.dataframe = frame
+    st.session_state.data_signature = signature
+    st.session_state.data_name = name
+    st.session_state.autopilot_result = None
+    forget_selections()
+
+
+def load_dataset(load, signature: str, name: str) -> None:
+    """Veriyi yükler; okuma hatasında önceki veri korunur ve Türkçe hata gösterilir (aynı dosya tekrar denenmez)."""
+    if signature in (st.session_state.data_signature, st.session_state.get("failed_signature")):
+        return
+    try:
+        frame = load()
+    except ValueError as exc:
+        st.session_state.failed_signature = signature
+        st.session_state.load_error = str(exc)
+        return
+    st.session_state.failed_signature = None
+    st.session_state.load_error = None
+    set_dataset(frame, signature, name)
+
+
+def joined_active() -> bool:
+    return str(st.session_state.data_signature or "").startswith("join:")
+
+
+@st.cache_resource(show_spinner="Tablolar okunuyor ve ilişkiler aranıyor...")
+def discover_tables(signature: tuple[tuple[str, int, int], ...]) -> tuple:
+    """`data/` klasöründeki tabloları bir kez okur; dosyalar değişince imza değişir ve yeniden okunur."""
+    tables = load_tables([Path(item[0]) for item in signature])
+    finder = RelationFinder()
+    return tables, finder.describe(tables), finder.discover(tables)
+
+
+def require_result() -> AutopilotResult:
+    """Otopilot sonucunu döndürür; veri yoksa ya da çoklu tablo henüz birleştirilmediyse sayfayı durdurur."""
+    if st.session_state.get("work_mode", SINGLE_TABLE) != SINGLE_TABLE and not joined_active():
+        st.info("Çoklu tablo modunda önce Genel Bakış sayfasında tabloları birleştirin.")
+        st.stop()
+    frame = st.session_state.dataframe
+    if frame is None:
+        st.info("Başlamak için sol menüden bir CSV seçin, Excel/CSV yükleyin veya örnek veri üretin.")
+        st.stop()
+    if st.session_state.autopilot_result is None:
+        with st.spinner("Otopilot veriyi temizliyor ve en mantıklı analizleri hazırlıyor..."):
+            try:
+                st.session_state.autopilot_result = AutopilotEngine().run_full_autopilot(
+                    frame, api_key=st.session_state.get("api_key", "")
+                )
+            except (ValueError, TypeError, KeyError) as exc:
+                st.error(f"Otopilot çalıştırılamadı: {exc}")
+                st.stop()
+    return st.session_state.autopilot_result
+
+
+# --- Zaman serisi -------------------------------------------------------------------------------
+
+def default_timeseries_request(result: AutopilotResult) -> tuple | None:
+    dates = date_columns(result.cleaned_frame)
+    if not dates:
+        return None
+    default_date = result.timeseries.summary.date_column if result.timeseries is not None else dates[0]
+    return (default_date, None, "auto")
+
+
+def timeseries_request(result: AutopilotResult) -> tuple | None:
+    """Kullanıcının Zaman Serisi sayfasındaki son seçimi; sayfa açılmadıysa otopilotun varsayılanı."""
+    return remembered("ts_request", default_timeseries_request(result))
+
+
+def timeseries_for(result: AutopilotResult, request: tuple | None) -> tuple:
+    """(analiz, hata metni). Varsayılan seçim otopilot sonucundan gelir; diğerleri bir kez hesaplanır."""
+    if request is None or request == default_timeseries_request(result):
+        return result.timeseries, result.timeseries_message
+    cache = st.session_state.setdefault("timeseries_cache", {})
+    key = (st.session_state.data_signature, *request)
+    if key not in cache:
+        try:
+            cache[key] = TimeSeriesEngine().analyze(
+                result.cleaned_frame, date_column=request[0], value_column=request[1], frequency=request[2]
+            )
+        except ValueError as exc:
+            cache[key] = f"Zaman serisi analizi yapılamadı: {exc}"
+    cached = cache[key]
+    return (None, cached) if isinstance(cached, str) else (cached, "")
+
+
+# --- Dönem karşılaştırması ----------------------------------------------------------------------
+
+def stored_drift(request: tuple | None):
+    """Bu veri ve bu istek için yapılmış karşılaştırma (sonuç ya da hata metni); yoksa None."""
+    stored = st.session_state.get("drift_result")
+    if request is not None and stored and stored[0] == st.session_state.data_signature and stored[1] == request:
+        return stored[2]
+    return None
+
+
+# --- AutoML ve açıklama -------------------------------------------------------------------------
+
+def automl_selection(result: AutopilotResult) -> tuple[str | None, tuple]:
+    """(hedef, ayarlar). Hedef None ise kullanıcı hedef seçmemiştir."""
+    default_target = result.suggested_target if result.suggested_target in result.cleaned_frame.columns else None
+    return remembered("automl_target", default_target), remembered("automl_settings", DEFAULT_AUTOML_SETTINGS)
+
+
+def automl_for(result: AutopilotResult, target: str | None, settings: tuple) -> tuple:
+    """(AutoML sonucu, hata metni). Aynı veri, hedef ve ayarlar için model yalnızca bir kez eğitilir."""
+    if target is None or (target == result.suggested_target and settings == DEFAULT_AUTOML_SETTINGS):
+        return result.automl_result, ""
+    cache = st.session_state.setdefault("automl_cache", {})
+    key = (st.session_state.data_signature, target, settings)
+    if key not in cache:
+        cleaned = result.cleaned_frame
+        sample = cleaned.sample(10_000, random_state=42) if len(cleaned) > 10_000 else cleaned
+        try:
+            with st.spinner("Modeller çapraz doğrulamayla karşılaştırılıyor..."):
+                cache[key] = AutoMLEngine().run(
+                    sample, target, time_column=settings[0], exclude_columns=settings[1], known_columns=settings[2],
+                )
+        except (ValueError, TypeError, KeyError) as exc:
+            cache[key] = f"'{target}' hedefi için AutoML çalıştırılamadı: {exc}"
+    cached = cache[key]
+    return (None, cached) if isinstance(cached, str) else (cached, "")
+
+
+def explanation_for(target: str | None, settings: tuple, automl):
+    """Kısmi bağımlılık ve what-if hazırlığı; açıklanamıyorsa Türkçe neden metni, model yoksa None."""
+    if automl is None or automl.model is None or automl.background is None:
+        return None
+    cache = st.session_state.setdefault("explain_cache", {})
+    key = (st.session_state.data_signature, target, settings, automl.best_model)
+    if key not in cache:
+        try:
+            cache[key] = ModelExplainer().explain(automl)
+        except ValueError as exc:
+            cache[key] = f"Açıklama üretilemedi: {exc}"
+    return cache[key]

@@ -66,8 +66,17 @@ def _ok(application: AppTest) -> None:
     assert not application.exception, [str(item.value)[:300] for item in application.exception]
 
 
+GENEL, KALITE, ZAMAN, MODEL, RAPOR = (
+    "views/genel_bakis.py", "views/kalite.py", "views/zaman_serisi.py", "views/model.py", "views/rapor.py",
+)
+
+
 def test_single_table_flow_timeseries_drift_chat_and_report(app: AppTest) -> None:
     app.sidebar.selectbox[0].select("olist_orders_dataset.csv").run()
+    _ok(app)
+    assert "🚀 Otopilot Yönetici Özeti" in [item.value for item in app.header]
+
+    app.switch_page(ZAMAN).run()
     _ok(app)
     headers = [item.value for item in app.header]
     assert "📈 Zaman Serisi Otopilotu" in headers and "🔀 Dönem Karşılaştırması" in headers
@@ -81,22 +90,52 @@ def test_single_table_flow_timeseries_drift_chat_and_report(app: AppTest) -> Non
     _ok(app)
     assert any(item.value.startswith("“2017” ile “2018” arasında") for item in app.markdown)
 
+    app.switch_page(GENEL).run()
     app.text_input(key="autopilot_chat_question").set_value("canceled siparişlerin aylık sayısı").run()
     app.button(key="autopilot_chat_button").click().run()
     _ok(app)
     assert any("Filtre: order_status == canceled" in item.value for item in app.markdown)
     assert any("SELECT DATE_TRUNC('month'" in item.value for item in app.code)
 
+    app.switch_page(RAPOR).run()
+    _ok(app)
     app.button(key="report_button").click().run()
     _ok(app)
     page = app.session_state["report_files"]["html"].decode("utf-8")
     for heading in ("Zaman Serisi", "Dönem Karşılaştırması", "Tahmin Modeli", "Uygulanan İşlemler"):
         assert f"<h2>{heading}</h2>" in page
+    # Rapor, Zaman Serisi sayfasındaki haftalık seçimi kullanır (sayfa değişse de seçim kaybolmaz).
+    assert "haftalık" in page.split("<h2>Zaman Serisi</h2>")[1].split("</section>")[0]
     assert app.session_state["report_files"]["pdf"].startswith(b"%PDF")
+
+
+def test_selections_survive_page_changes(app: AppTest) -> None:
+    """Streamlit, çizilmeyen widget'ın durumunu siler; seçimler başka sayfaya gidip dönünce korunmalı."""
+    app.sidebar.selectbox[0].select("olist_orders_dataset.csv").run()
+    app.switch_page(ZAMAN).run()
+    app.selectbox(key="ts_frequency").select("Aylık").run()
+    app.radio(key="drift_mode").set_value("Kesim tarihi").run()
+    _ok(app)
+    app.switch_page(MODEL).run()
+    app.selectbox(key="autopilot_target").select("price").run()
+    _ok(app)
+    app.switch_page(KALITE).run()
+    _ok(app)
+    app.switch_page(ZAMAN).run()
+    _ok(app)
+    assert app.selectbox(key="ts_frequency").value == "Aylık"
+    assert app.radio(key="drift_mode").value == "Kesim tarihi"
+    app.switch_page(MODEL).run()
+    _ok(app)
+    assert app.selectbox(key="autopilot_target").value == "price"
+    app.switch_page(RAPOR).run()
+    _ok(app)
+    assert any("model hedefi: price" in item.value for item in app.caption)
 
 
 def test_prediction_time_settings_and_what_if(app: AppTest) -> None:
     app.sidebar.selectbox[0].select("olist_orders_dataset.csv").run()
+    app.switch_page(MODEL).run()
     _ok(app)
     app.selectbox(key="autopilot_target").select("order_status").run()
     _ok(app)
@@ -123,10 +162,17 @@ def test_multi_table_join_flow(app: AppTest) -> None:
     labels = [item.label for item in app.checkbox]
     assert any(label.startswith("customers — eşleştir") for label in labels)
     assert any(label.startswith("order_reviews — topla") for label in labels)
+    app.switch_page(MODEL).run()
+    _ok(app)
+    assert any("önce Genel Bakış sayfasında" in item.value for item in app.info)
+    app.switch_page(GENEL).run()
     app.button(key="join_button").click().run()
     _ok(app)
     assert ("Satır Değişimi", "700 → 700") in [(item.label, item.value) for item in app.metric]
+    app.switch_page(MODEL).run()
+    _ok(app)
     assert app.selectbox(key="autopilot_target").value == "order_reviews_review_score_ort"
+    app.switch_page(RAPOR).run()
     app.button(key="report_button").click().run()
     _ok(app)
     page = app.session_state["report_files"]["html"].decode("utf-8")

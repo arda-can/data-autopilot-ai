@@ -27,7 +27,8 @@ Makinede Smart App Control açık: derlenmiş bir modül (`.pyd`) ilk yüklemede
 
 - Tip ipuçları ve şemalar için `pydantic.BaseModel`.
 - Girdi DataFrame'i asla yerinde değiştirme; `.copy()` ile başla.
-- `app.py` yalnızca sunum; iş mantığı `core/` içinde.
+- `app.py` (giriş, veri kaynağı, gezinti) ve `views/` (sayfalar) yalnızca sunum; iş mantığı `core/` içinde.
+- Sayfalar arası durum `views/common.py` üzerinden: Streamlit çizilmeyen widget'ın durumunu sildiği için sayfa dışında da gereken seçimler `remember`/`remembered` ile saklanır ve widget'a varsayılan olarak verilir (widget anahtarına Session State ile değer yazma). Yeni veri yüklenince `set_dataset` hepsini unutur. Rapor sayfası diğer sayfaların son seçimlerini bu kayıttan okur.
 - Kullanıcıya görünen tüm metinler, açıklamalar ve loglar **Türkçe**.
 
 ## Analizden çıkan kurallar

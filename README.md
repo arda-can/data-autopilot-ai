@@ -52,7 +52,8 @@ Testler API anahtarı kullanmaz: kurallı yerel planlayıcı, maskeleme ve LLM'e
 ## Mimari
 
 ```
-app.py               Streamlit arayüzü (yalnızca sunum)
+app.py               Streamlit giriş noktası: veri kaynağı ve sayfa gezintisi
+views/               Sayfalar: Genel Bakış, Kalite, Zaman Serisi, Model, Rapor (yalnızca sunum)
 core/ingestion.py    Dosya okuma, encoding ve ayraç tespiti
 core/columns.py      Sütun tipi çıkarımı: metin, sayı, tarih, kimlik
 core/health.py       Kalite skoru ve aykırı değer raporu
