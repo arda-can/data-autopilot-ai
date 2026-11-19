@@ -1,6 +1,8 @@
 """A/B test analizi: oran ve ortalama testleri, güven aralıkları, güç/örneklem ve SRM kontrolü.
 
 - Oran (satır düzeyi): iki oranlı z-testi (p-değeri birleşik varyansla), fark için Wald güven aralığı.
+  Bir grupta başarı ya da başarısızlık sayısı 5'ten azsa (küçük örneklem, 0 ya da 1'e yakın oran) normal
+  yaklaşım geçersizdir: Fisher kesin testi ve süreklilik düzeltmeli Wilson/Newcombe aralığı kullanılır.
 - Ortalama ya da birim düzeyi: Welch t-testi ve Welch serbestlik dereceli güven aralığı.
 - Birim (randomizasyon birimi, ör. müşteri) verilirse metrik önce birim başına ortalanır; aynı müşterinin
   siparişleri bağımsız sayılmaz. Her iki grupta görünen birimler (atama bozulmuş) analiz dışı bırakılır.
@@ -27,6 +29,7 @@ from scipy import stats
 from core.columns import is_identifier_name, is_text_series, name_tokens
 
 SRM_THRESHOLD = 0.001
+MIN_CELL_COUNT = 5  # bir grupta başarı/başarısızlık sayısı bunun altındaysa normal yaklaşım yerine kesin test
 _GROUP_TOKENS = frozenset({"deney", "grup", "grubu", "variant", "varyant", "experiment", "test", "ab", "arm",
                            "treatment", "kol", "cohort_ab"})
 _CONTROL_PATTERN = re.compile(r"^(a|kontrol|control|eski|old|baseline|mevcut|base)$", re.IGNORECASE)
@@ -37,7 +40,8 @@ _UNIT_TOKENS = frozenset({"müşteri", "musteri", "customer", "client", "kullan�
                           "visitor", "ziyaretçi", "oturum", "session"})
 METHOD_NOTE = (
     "Oran metriğinde satır düzeyinde iki oranlı z-testi, ortalama metriğinde ya da birim düzeyinde Welch t-testi "
-    "kullanılır. Güven aralıkları çift yönlüdür; göreli artışın aralığı kontrol ortalamasının belirsizliğini yok "
+    "kullanılır; satır düzeyi oranda bir grupta başarı ya da başarısızlık sayısı 5'ten azsa Fisher kesin testi ve "
+    "süreklilik düzeltmeli Wilson (Newcombe) aralığı kullanılır. Güven aralıkları çift yönlüdür; göreli artışın aralığı kontrol ortalamasının belirsizliğini yok "
     "sayan yaklaşık bir aralıktır. SRM ki-kare testiyle sınanır (p < 0,001 alarm). Güç hesabı normal yaklaşımladır. "
     "Testin sonunda tek bir kez bakıldığı varsayılır; ara bakışlar ve çok sayıda metrik yanlış pozitif oranını artırır."
 )
@@ -265,7 +269,28 @@ class ExperimentAnalyzer:
         n1, n2 = len(control_values), len(treatment_values)
         var1, var2 = control.sd ** 2, treatment.sd ** 2
 
-        if spec.metric_kind == "oran" and not spec.unit_column:
+        successes = (int(control_values.sum()), int(treatment_values.sum()))
+        small = spec.metric_kind == "oran" and not spec.unit_column and min(
+            successes[0], n1 - successes[0], successes[1], n2 - successes[1]) < MIN_CELL_COUNT
+        if small:
+            # Normal yaklaşım küçük sayımlarda ve sınır oranlarda (0 ya da 1) geçersiz: Wald aralığı sıfır genişlikte
+            # çıkar, z-testi anlamlılığı abartır. Fisher kesin testi ve süreklilik düzeltmeli Wilson/Newcombe aralığı.
+            p_value = float(stats.fisher_exact(
+                [[successes[0], n1 - successes[0]], [successes[1], n2 - successes[1]]]).pvalue)
+            bounds = [_wilson_cc(count, size, z) for count, size in ((successes[0], n1), (successes[1], n2))]
+            control = control.model_copy(update={"ci_low": bounds[0][0], "ci_high": bounds[0][1]})
+            treatment = treatment.model_copy(update={"ci_low": bounds[1][0], "ci_high": bounds[1][1]})
+            (low1, high1), (low2, high2) = bounds
+            ci_low = difference - np.hypot(treatment.mean - low2, high1 - control.mean)
+            ci_high = difference + np.hypot(high2 - treatment.mean, control.mean - low1)
+            se = np.sqrt(control.mean * (1 - control.mean) / n1 + treatment.mean * (1 - treatment.mean) / n2)
+            test_name = "Fisher kesin testi"
+            var1 = control.mean * (1 - control.mean)
+            var2 = treatment.mean * (1 - treatment.mean)
+            notes.append(f"Bir grupta başarı ya da başarısızlık sayısı {MIN_CELL_COUNT}'ten az; normal yaklaşım "
+                         "geçersiz olduğu için Fisher kesin testi ve süreklilik düzeltmeli Wilson (Newcombe) güven "
+                         "aralığı kullanıldı. Bu örneklemle sonuç çok belirsizdir.")
+        elif spec.metric_kind == "oran" and not spec.unit_column:
             pooled = (control_values.sum() + treatment_values.sum()) / (n1 + n2)
             pooled_se = np.sqrt(pooled * (1 - pooled) * (1 / n1 + 1 / n2))
             p_value = float(2 * stats.norm.sf(abs(difference) / pooled_se)) if pooled_se > 0 else 1.0
@@ -283,7 +308,8 @@ class ExperimentAnalyzer:
             ) if se > 0 else n1 + n2 - 2
             critical = float(stats.t.ppf(1 - spec.alpha / 2, df))
             test_name = "Welch t-testi" + (f" ({spec.unit_column} düzeyinde)" if spec.unit_column else "")
-        ci_low, ci_high = difference - critical * se, difference + critical * se
+        if not small:
+            ci_low, ci_high = difference - critical * se, difference + critical * se
         relative = difference / control.mean if control.mean else None
         rel_low = ci_low / control.mean if control.mean else None
         rel_high = ci_high / control.mean if control.mean else None
@@ -332,6 +358,17 @@ class ExperimentAnalyzer:
             srm=srm, power=power, excluded_units=excluded_units, verdict=verdict, notes=notes,
         )
         return ExperimentResult(report, _figure(report))
+
+
+def _wilson_cc(successes: int, size: int, z: float) -> tuple[float, float]:
+    """Süreklilik düzeltmeli Wilson aralığı (Newcombe 1998, yöntem 4); 0 ve 1 oranlarında da genişliği vardır."""
+    p, z2 = successes / size, z * z
+    denominator = 2 * (size + z2)
+    low = 0.0 if successes == 0 else max(0.0, (
+        2 * size * p + z2 - 1 - z * np.sqrt(z2 - 2 - 1 / size + 4 * p * (size * (1 - p) + 1))) / denominator)
+    high = 1.0 if successes == size else min(1.0, (
+        2 * size * p + z2 + 1 + z * np.sqrt(z2 + 2 - 1 / size + 4 * p * (size * (1 - p) - 1))) / denominator)
+    return float(low), float(high)
 
 
 def _signed_pct(value: float | None) -> str:

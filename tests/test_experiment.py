@@ -53,6 +53,33 @@ def test_proportion_test_matches_statsmodels() -> None:
     assert significant.significant and "anlamlı biçimde yüksek" in significant.verdict
 
 
+def test_small_counts_use_fisher_exact_and_nonzero_intervals() -> None:
+    """Regresyon: 0/2 ile 2/2 z-testiyle p=0,0455 ve "anlamlı" çıkıyor, güven aralıkları sıfır genişlikteydi."""
+    report = ExperimentAnalyzer().analyze(_binary((0, 2), (2, 2)), _spec()).report
+    assert report.test_name == "Fisher kesin testi"
+    assert report.p_value == pytest.approx(1 / 3)
+    assert report.significant is False and "anlamlı fark yok" in report.verdict
+    assert report.control.ci_high > 0.5 and report.treatment.ci_low < 0.5
+    assert report.ci_low < 0 < report.ci_high  # anlamsız sonuçla tutarlı: fark aralığı sıfırı içerir
+    assert any("Fisher" in note for note in report.notes)
+    # Büyük örneklemde de sınır oran (0 başarı) kesin teste geçer; aralık sıfır genişlikte kalmaz.
+    boundary = ExperimentAnalyzer().analyze(_binary((0, 400), (12, 400)), _spec()).report
+    assert boundary.test_name == "Fisher kesin testi" and boundary.control.ci_high > 0
+    assert boundary.significant  # gerçek fark yine yakalanır
+
+
+def test_wilson_continuity_interval_matches_newcombe_tables() -> None:
+    """Newcombe (1998) tablo değerleri: 0/10 için (0, 0,3445); 56/70 − 48/80 farkı için (0,0428; 0,3422)."""
+    from core.experiment import _wilson_cc
+
+    assert _wilson_cc(0, 10, 1.959964) == pytest.approx((0.0, 0.3445), abs=5e-4)
+    (low1, high1), (low2, high2) = _wilson_cc(56, 70, 1.959964), _wilson_cc(48, 80, 1.959964)
+    difference = 0.8 - 0.6
+    low = difference - np.hypot(0.8 - low1, high2 - 0.6)
+    high = difference + np.hypot(high1 - 0.8, 0.6 - low2)
+    assert (low, high) == pytest.approx((0.0428, 0.3422), abs=5e-4)
+
+
 def test_welch_interval_matches_statsmodels() -> None:
     rng = np.random.default_rng(3)
     control, treatment = rng.normal(100, 20, 300), rng.normal(106, 30, 250)
