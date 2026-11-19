@@ -9,8 +9,8 @@ import streamlit as st
 
 from core.report import build_report, render_html, render_pdf
 from views.common import (
-    automl_for, automl_selection, explanation_for, joined_active, remembered, require_result, stored_drift,
-    timeseries_for, timeseries_request,
+    automl_for, automl_selection, explanation_for, joined_active, remembered, require_result, rule_evaluation,
+    stored_drift, timeseries_for, timeseries_request,
 )
 
 result = require_result()
@@ -29,6 +29,7 @@ automl, automl_error = automl_for(result, target, settings)
 drift_request = remembered("drift_request")
 drift_outcome = stored_drift(drift_request)
 report_drift = None if drift_outcome is None or isinstance(drift_outcome, str) else drift_outcome.report
+rule_report, _ = rule_evaluation(result)
 
 included = [
     f"zaman serisi: {timeseries.summary.date_column} ({timeseries.summary.frequency_label})"
@@ -36,10 +37,12 @@ included = [
     f"model hedefi: {target}" if automl is not None else "model: yok",
     "dönem karşılaştırması: var" if report_drift is not None else
     "dönem karşılaştırması: yok (Zaman Serisi sayfasında “Karşılaştır” ile eklenir)",
+    f"iş kuralları: {len(rule_report.results)}" if rule_report is not None else "iş kuralları: yok",
 ]
 st.caption("Rapora girecekler — " + " · ".join(included))
 
-report_key = (st.session_state.data_signature, target, ts_request, settings, str(drift_request))
+rule_keys = () if rule_report is None else tuple(item.rule.key for item in rule_report.results)
+report_key = (st.session_state.data_signature, target, ts_request, settings, str(drift_request), rule_keys)
 if st.button("Raporu Hazırla", key="report_button"):
     with st.spinner("Rapor hazırlanıyor..."):
         explanation = explanation_for(target, settings, automl)
@@ -61,6 +64,7 @@ if st.button("Raporu Hazırla", key="report_button"):
             drift=report_drift,
             explanation=report_explanation,
             join_logs=st.session_state.get("join_logs") if joined_active() else None,
+            rules=rule_report,
         )
         chart_figures = [chart.figure for chart in result.charts]
         st.session_state.report_files = {

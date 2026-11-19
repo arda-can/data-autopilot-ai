@@ -9,6 +9,7 @@ Bir CSV veya Excel dosyası verin; veriyi temizlesin, en anlamlı grafikleri se�
 - **LLM kod çalıştırmaz, yalnızca plan yapar.** Gemini, Pydantic şemasıyla doğrulanan bir JSON planı döndürür; dönüşümleri önceden yazılmış güvenli fonksiyonlar uygular. Kod tabanında `exec`/`eval` yoktur.
 - **Kişisel veri LLM'e gitmez.** Ham satır gönderilmez. E-posta, telefon, TC kimlik, IBAN ve kart numarası maskelenir; hassas sütunların örnekleri ve istatistikleri tümüyle gizlenir.
 - **Veri sızıntısı yok.** Eksik doldurma ve ölçekleme yalnızca eğitim bölmesinden öğrenilir. Temizlenmiş veride eksikler ve aykırı değerler uydurulmaz, yalnızca raporlanır.
+- **Kalite iki ayrı ölçü.** Yapısal hijyen skoru biçimi (boşluk, tekrar, tip) ölçer; iş kuralı uyumu ise tanımladığınız kurallara (aralık, benzersiz, boş olamaz, izinli değerler, desen, iki sütun karşılaştırması) uyan kayıtların oranıdır. Kurallar veriden önerilir ya da elle eklenir, JSON olarak kaydedilir; ihlal eden kayıtlar indirilebilir.
 - **Her değişiklik kayıtlı.** Hangi sütuna ne yapıldığı ve kaç satırın etkilendiği audit log'da görünür.
 - **Modeller bir taban çizgisiyle kıyaslanır.** Hiçbir özelliğe bakmayan taban modeli geçemeyen sonuç, "tahmin edilemiyor" olarak açıkça bildirilir.
 - **Zaman serisi otopilotu.** Tarih sütunu bulununca trend, haftalık/yıllık döngü, olağan dışı dönemler ve %80 aralıklı tahmin; model, naif tahmine karşı geriye dönük test edilir ve geçemezse bunu söyler.
@@ -59,7 +60,8 @@ app.py               Streamlit giriş noktası: veri kaynağı ve sayfa gezintis
 views/               Sayfalar: Genel Bakış, Kalite, Zaman Serisi, Model, Rapor (yalnızca sunum)
 core/ingestion.py    Dosya okuma, encoding ve ayraç tespiti
 core/columns.py      Sütun tipi çıkarımı: metin, sayı, tarih, kimlik
-core/health.py       Kalite skoru ve aykırı değer raporu
+core/health.py       Yapısal hijyen skoru ve aykırı değer raporu
+core/rules.py        Veri kuralları ve iş kuralı uyumu
 core/metadata.py     PII maskeli metadata kartı
 core/planner.py      Gemini planlayıcı + kurallı fallback
 core/executor.py     Deterministik dönüşümler ve audit log

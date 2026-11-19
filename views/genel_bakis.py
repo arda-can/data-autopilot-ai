@@ -9,7 +9,9 @@ from core.chat import DataChatEngine
 from core.formatting import decimal_tr, display_frame, integer_tr
 from core.ingestion import frame_signature, list_local_csv_files
 from core.relations import apply_plan, default_base, prune_plan, relation_figure, suggest_plan
-from views.common import SINGLE_TABLE, discover_tables, joined_active, require_result, set_dataset
+from views.common import (
+    SINGLE_TABLE, discover_tables, joined_active, require_result, rule_evaluation, set_dataset,
+)
 
 
 def _multi_table_section() -> None:
@@ -101,15 +103,23 @@ result = require_result()
 before, after, cleaned = result.before_report, result.after_report, result.cleaned_frame
 
 st.header("🚀 Otopilot Yönetici Özeti")
-metrics = st.columns(4)
+rule_report, _ = rule_evaluation(result)
+metrics = st.columns(5)
 metrics[0].metric(
-    "Kalite Skoru",
+    "Yapısal Hijyen",
     f"{decimal_tr(after.kalite_skoru)}/100",
     delta=decimal_tr(after.kalite_skoru - before.kalite_skoru),
+    help="Boş/sabit sütun, mükerrer ve tip sorunlarını ölçer; değerlerin doğruluğunu ölçmez.",
 )
-metrics[1].metric("Satır Değişimi", f"{before.satır_sayısı} → {after.satır_sayısı}")
-metrics[2].metric("Sütun Değişimi", f"{before.sütun_sayısı} → {after.sütun_sayısı}")
-metrics[3].metric("Otomatik İşlem", len(result.audit_logs))
+metrics[1].metric(
+    "İş Kuralı Uyumu",
+    "—" if rule_report is None or rule_report.compliance_score is None
+    else f"%{decimal_tr(rule_report.compliance_score)}",
+    help="Hiçbir kuralı ihlal etmeyen kayıtların oranı (Kalite sayfasındaki kurallar).",
+)
+metrics[2].metric("Satır Değişimi", f"{before.satır_sayısı} → {after.satır_sayısı}")
+metrics[3].metric("Sütun Değişimi", f"{before.sütun_sayısı} → {after.sütun_sayısı}")
+metrics[4].metric("Otomatik İşlem", len(result.audit_logs))
 
 st.write("**Başlangıçta tespit edilen veri sorunları**")
 issues = before.sorunlar if before.sorunlar != ["Belirgin bir kalite sorunu tespit edilmedi."] else [

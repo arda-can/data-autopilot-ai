@@ -23,6 +23,7 @@ from core.health import LOG_METHOD, OutlierFinding
 from core.formatting import decimal_tr, integer_tr, localize_figure
 from core.timeseries import TimeSeriesSummary, format_period
 from core.drift import DriftReport
+from core.rules import RuleReport
 from core.executor import RejectedAction
 from core.explain import PDP_NOTE, ModelExplanation, PartialDependence
 from core.planner import PlanOrigin
@@ -104,6 +105,7 @@ class ExecutiveReport(BaseModel):
     timeseries: TimeSeriesSummary | None = None
     timeseries_message: str = ""
     drift: DriftReport | None = None
+    rules: RuleReport | None = None
     pdp: list[PartialDependence] = Field(default_factory=list)
     join_logs: list[JoinLog] = Field(default_factory=list)
     plan_origin: PlanOrigin | None = None
@@ -189,6 +191,7 @@ def build_report(
     drift: DriftReport | None = None,
     explanation: ModelExplanation | None = None,
     join_logs: list[JoinLog] | None = None,
+    rules: RuleReport | None = None,
 ) -> ExecutiveReport:
     """Otopilot sonucundan JSON'a çevrilebilir, sunuma hazır yönetici raporu üretir."""
     before, after = result.before_report, result.after_report
@@ -204,7 +207,8 @@ def build_report(
     headline = [
         f"{_int(before.satır_sayısı)} satır ve {before.sütun_sayısı} sütunluk veri incelendi; "
         f"temizlik sonrası {_int(after.satır_sayısı)} satır ve {after.sütun_sayısı} sütun kaldı.",
-        f"Veri kalitesi skoru {_dec(before.kalite_skoru)} → {_dec(after.kalite_skoru)} (100 üzerinden).",
+        f"Yapısal hijyen skoru {_dec(before.kalite_skoru)} → {_dec(after.kalite_skoru)} (100 üzerinden; "
+        "boşluk, tekrar ve tip sorunlarını ölçer, değerlerin doğruluğunu ölçmez).",
         f"{len(result.audit_logs)} otomatik işlem uygulandı; tamamı kayıt altında."
         if result.audit_logs else "Veride yapısal bir düzeltme gerekmedi.",
     ]
@@ -216,6 +220,11 @@ def build_report(
         headline.append(
             f"{len(outliers)} sütunda şüpheli uç değer bulundu (en belirgini: {outliers[0].column}); "
             "değerler değiştirilmedi, yalnızca raporlandı."
+        )
+    if rules is not None and rules.compliance_score is not None:
+        headline.append(
+            f"İş kuralı uyumu %{_dec(rules.compliance_score)}: {len(rules.applied)} kuraldan en az birini ihlal eden "
+            f"{_int(rules.violating_rows)} kayıt var (değerler değiştirilmedi)."
         )
     timeseries = result.timeseries.summary if result.timeseries is not None else None
     if timeseries is not None:
@@ -244,6 +253,13 @@ def build_report(
             f"{_int(finding.group_count)} olası kategori kopyası grubu ({_int(finding.affected_count)} kayıt) var. "
             "Birleştirme öncesinde incelenmesi önerilir; değerler değiştirilmedi."
         )
+    if rules is not None:
+        broken = sorted((item for item in rules.applied if item.violations), key=lambda item: -item.violations)
+        for item in broken[:3]:
+            recommendations.append(
+                f"Kural ihlali: {item.description} — {_int(item.violations)} kayıt uymuyor. "
+                "İhlal eden kayıtlar uygulamadan indirilip kaynağında düzeltilmeli."
+            )
     if before.mükerrer_satır_sayısı:
         recommendations.append(
             f"{_int(before.mükerrer_satır_sayısı)} mükerrer kayıt bulundu ve kaldırıldı; "
@@ -331,6 +347,7 @@ def build_report(
         timeseries=timeseries,
         timeseries_message=result.timeseries_message,
         drift=drift,
+        rules=rules,
         pdp=list(explanation.curves) if explanation is not None else [],
         join_logs=list(join_logs or []),
         plan_origin=result.plan_origin,
@@ -379,7 +396,10 @@ def _timeseries_facts(series: TimeSeriesSummary) -> list[tuple[str, str]]:
 
 def _kpis(report: ExecutiveReport) -> list[tuple[str, str, str]]:
     return [
-        ("Kalite Skoru", f"{_dec(report.quality_after)}/100", f"önce {_dec(report.quality_before)}"),
+        ("Yapısal Hijyen", f"{_dec(report.quality_after)}/100", f"önce {_dec(report.quality_before)}"),
+        *([("İş Kuralı Uyumu", f"%{_dec(report.rules.compliance_score)}",
+            f"{_int(report.rules.violating_rows)} kayıt ihlalli")]
+          if report.rules is not None and report.rules.compliance_score is not None else []),
         ("Satır", _int(report.rows_after), f"önce {_int(report.rows_before)}"),
         ("Sütun", _int(report.columns_after), f"önce {_int(report.columns_before)}"),
         ("Otomatik İşlem", _int(len(report.actions)), "tamamı kayıtlı"),
@@ -412,6 +432,13 @@ def _tables(report: ExecutiveReport) -> dict[str, tuple[list[str], list[list[str
             ["Dönem", "Gözlenen", "Beklenen", "Sapma (z)", "Yön"],
             [[item.label, _num(item.observed), _num(round(item.expected, 1)), _dec(item.z), item.direction]
              for item in report.timeseries.anomalies],
+        )
+    if report.rules is not None and report.rules.results:
+        tables["rules"] = (
+            ["Kural", "Kaynak", "Kontrol", "İhlal", "Uyum"],
+            [[item.description, item.rule.source, _int(item.checked), _int(item.violations),
+              _pct(item.compliance) if item.compliance is not None else (item.error or "—")]
+             for item in report.rules.results[:30]],
         )
     if report.drift and report.drift.columns:
         changed = [item for item in report.drift.columns if item.status != "yeşil"] or report.drift.columns[:5]
@@ -546,6 +573,11 @@ def render_html(
         parts.append("</section>")
     elif report.timeseries_message:
         parts.append(f"<section><h2>Zaman Serisi</h2><p>{escape(report.timeseries_message)}</p></section>")
+
+    if "rules" in tables:
+        parts.append("<section><h2>İş Kuralı Uyumu</h2>")
+        parts.append(_html_table(*tables["rules"]))
+        parts.append(f'<p class="note" style="margin-top:8px">{escape(report.rules.method_note)}</p></section>')
 
     if report.drift:
         drift = report.drift
@@ -774,9 +806,10 @@ def render_pdf(
         para(f"Oluşturulma: {report.generated_at}", note),
         Spacer(1, 10),
     ]
+    kpis = _kpis(report)
     kpi_table = Table(
-        [[[para(label, note), para(value, kpi_value), para(detail, note)] for label, value, detail in _kpis(report)]],
-        colWidths=[content_width / 4] * 4,
+        [[[para(label, note), para(value, kpi_value), para(detail, note)] for label, value, detail in kpis]],
+        colWidths=[content_width / len(kpis)] * len(kpis),
     )
     kpi_table.setStyle(TableStyle([
         ("BOX", (0, 0), (-1, -1), 0.5, line), ("INNERGRID", (0, 0), (-1, -1), 0.5, line),
@@ -807,6 +840,13 @@ def render_pdf(
         story += [para(f"Not: {item}", note) for item in series.notes]
     elif report.timeseries_message:
         story += [para("Zaman Serisi", h2), para(report.timeseries_message)]
+
+    if "rules" in tables:
+        story += [
+            para("İş Kuralı Uyumu", h2),
+            table(*tables["rules"], widths=[0.52, 0.12, 0.12, 0.12, 0.12]),
+            para(report.rules.method_note, note),
+        ]
 
     if report.drift:
         drift = report.drift

@@ -206,3 +206,39 @@ def test_demo_button_loads_demo_dataset(monkeypatch: pytest.MonkeyPatch, tmp_pat
     application.switch_page(KALITE).run()
     _ok(application)
     assert any(item.value.startswith("tutar: 4 negatif değer") for item in application.warning)
+
+
+def test_business_rules_on_quality_page(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("AUTOPILOT_DATA_DIR", str(tmp_path))
+    application = AppTest.from_file(str(ROOT / "app.py"), default_timeout=TIMEOUT)
+    application.run()
+    application.sidebar.button(key="demo_button").click().run()
+    application.switch_page(KALITE).run()
+    _ok(application)
+    metrics = {item.label: item.value for item in application.metric}
+    assert metrics["İş Kuralı Uyumu"] == "%99,5" and metrics["Kural İhlali Olan Kayıt"] == "37"
+    assert metrics["Yapısal Hijyen Skoru"].endswith("/100")
+
+    tutar_rule = next(box for box in application.checkbox if box.label.startswith("“tutar” en az 0 olmalı"))
+    tutar_rule.uncheck().run()
+    _ok(application)
+    assert {item.label: item.value for item in application.metric}["Kural İhlali Olan Kayıt"] == "33"
+
+    application.selectbox(key="rule_kind").select("İzinli değerler").run()
+    application.selectbox(key="rule_column").select("kanal")
+    application.text_area(key="rule_values").input("Web\nMobil Uygulama")
+    next(button for button in application.button if button.label == "Kuralı ekle").click().run()
+    _ok(application)
+    assert any("“kanal” yalnızca şu değerleri alabilir: Web, Mobil Uygulama" in item.value for item in application.markdown)
+    violating = int({item.label: item.value for item in application.metric}["Kural İhlali Olan Kayıt"].replace(".", ""))
+    assert violating > 1000  # mağaza siparişleri bu kuralı ihlal eder
+
+    application.switch_page(GENEL).run()
+    _ok(application)
+    assert {item.label: item.value for item in application.metric}["İş Kuralı Uyumu"] != "%99,5"
+    application.switch_page(RAPOR).run()
+    application.button(key="report_button").click().run()
+    _ok(application)
+    page = application.session_state["report_files"]["html"].decode("utf-8")
+    assert "<h2>İş Kuralı Uyumu</h2>" in page and "“kanal” yalnızca" in page
+    assert "“tutar” en az 0 olmalı" not in page  # onayı kaldırılan öneri rapora girmez

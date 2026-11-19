@@ -9,15 +9,18 @@ Bir sonucu etkileyen her seçim önbellek anahtarına girer; anahtarın ilk öğ
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import streamlit as st
 
 from core.autopilot import AutopilotEngine, AutopilotResult
 from core.automl import AutoMLEngine
 from core.explain import ModelExplainer
 from core.relations import RelationFinder, load_tables
+from core.rules import DataRule, RuleReport, evaluate_rules, suggest_rules
 from core.timeseries import TimeSeriesEngine, date_columns
 
 MEMORY_PREFIX = "_hatirla_"
@@ -147,6 +150,60 @@ def stored_drift(request: tuple | None):
     if request is not None and stored and stored[0] == st.session_state.data_signature and stored[1] == request:
         return stored[2]
     return None
+
+
+# --- İş kuralları -------------------------------------------------------------------------------
+
+def rule_id(rule: DataRule) -> str:
+    return hashlib.sha1(rule.key.encode("utf-8")).hexdigest()[:10]
+
+
+def rule_candidates(result: AutopilotResult) -> list[DataRule]:
+    """Onay bekleyen öneriler: yerel öneriler (veri başına bir kez hesaplanır) ve varsa Gemini önerileri."""
+    cache = st.session_state.setdefault("rule_suggestion_cache", {})
+    signature = st.session_state.data_signature
+    if signature not in cache:
+        cache[signature] = suggest_rules(result.cleaned_frame)
+    gemini = [DataRule.model_validate(item) for item in remembered("gemini_rules", [])]
+    seen: set[str] = set()
+    return [rule for rule in [*cache[signature], *gemini] if not (rule.key in seen or seen.add(rule.key))]
+
+
+def custom_rules() -> list[DataRule]:
+    return [DataRule.model_validate(item) for item in remembered("custom_rules", [])]
+
+
+def add_custom_rules(rules: list[DataRule]) -> int:
+    """Aynı kural iki kez eklenmez; eklenen kural sayısını döndürür."""
+    current = remembered("custom_rules", [])
+    keys = {DataRule.model_validate(item).key for item in current}
+    fresh = [rule.model_dump() for rule in rules if rule.key not in keys]
+    remember("custom_rules", [*current, *fresh])
+    return len(fresh)
+
+
+def active_rules(result: AutopilotResult) -> list[DataRule]:
+    """Uygulanan kurallar: onaylı öneriler (varsayılan: onaylı) ve kullanıcının eklediği kurallar."""
+    # Onay kutusunun güncel değeri (bu çalışmada tıklandıysa) hatırlanandan önce gelir.
+    approved = [
+        rule for rule in rule_candidates(result)
+        if st.session_state.get(f"rule_on_{rule_id(rule)}", remembered(f"rule_on_{rule_id(rule)}", True))
+    ]
+    keys = {rule.key for rule in approved}
+    return approved + [rule for rule in custom_rules() if rule.key not in keys]
+
+
+def rule_evaluation(result: AutopilotResult) -> tuple[RuleReport | None, pd.DataFrame | None]:
+    """(kural raporu, ihlal matrisi); kural yoksa (None, None). Aynı veri ve kural kümesi için bir kez hesaplanır."""
+    rules = active_rules(result)
+    if not rules:
+        return None, None
+    cache = st.session_state.setdefault("rule_cache", {})
+    key = (st.session_state.data_signature, tuple(rule.key for rule in rules))
+    if key not in cache:
+        cache.clear()  # yalnızca son değerlendirme tutulur; ihlal matrisi veri boyutundadır
+        cache[key] = evaluate_rules(result.cleaned_frame, rules)
+    return cache[key]
 
 
 # --- AutoML ve açıklama -------------------------------------------------------------------------
