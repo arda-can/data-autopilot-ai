@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import streamlit as st
 
+from core.demo_data import DEMO_FILENAME, write_demo_data
 from core.ingestion import (
     content_signature,
+    data_directory,
     generate_sample_dirty_data,
     list_local_csv_files,
     read_local_csv,
@@ -45,6 +47,15 @@ with st.sidebar:
         uploaded = st.file_uploader("CSV veya Excel (.xlsx) yükleyin", type=["csv", "xlsx"])
     else:
         st.caption("Tablolar arası ilişkiler Genel Bakış sayfasında keşfedilir; onayladığınız plan tek tabloya birleştirilir.")
+    if work_mode == SINGLE_TABLE and st.button(
+        "Demo e-ticaret verisini yükle", key="demo_button", width="stretch",
+        help="Sentetik veri: tekrar eden müşteriler, PII sütunları, kural ihlalleri, 2025'te kayma ve bir A/B deneyi.",
+    ):
+        path = data_directory() / DEMO_FILENAME
+        if not path.exists():
+            write_demo_data(path)
+        load_dataset(lambda: read_local_csv(path), f"demo:{path.stat().st_mtime_ns}", path.name)
+        st.rerun()
     if work_mode == SINGLE_TABLE and st.button("Örnek Kirli Türkçe Veri Üret ve Yükle", width="stretch"):
         path = generate_sample_dirty_data()
         load_dataset(lambda: read_local_csv(path), f"sample:{path.stat().st_mtime_ns}", path.name)

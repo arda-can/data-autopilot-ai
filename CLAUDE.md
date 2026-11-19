@@ -41,6 +41,7 @@ Bunların her biri gerçek bir hatadan doğdu (ayrıntı: `ANALIZ.md`).
 - **Tarihte kör `dayfirst=True` yok.** ISO tarihler gün/ay takasına uğrar; `parse_datetime_text` kullan.
 - **Hedef sütuna ve eksik değerlere dokunma.** Aykırı değerler yalnızca raporlanır (`OutlierFinding`).
 - **Kalite skoru veya metrik parlatmak için veri uydurma.** Demo dürüst olmalı.
+- **Demo veri (`core/demo_data.py`) üreticiyle aynı kalır.** Üreticiyi değiştirirsen `write_demo_data()` ile `data/demo_eticaret_siparisleri.csv`'yi yeniden yaz; test ikisini karşılaştırır. Yeni bir özelliğin örüntüsü gerekiyorsa üreticiye ekle ve `DEMO_STORY`/`injected` içinde belgele.
 - **Her hata düzeltmesi bir regresyon testiyle gelir.** Testler `tests/fixtures/` altındaki sentetik veriyi kullanır; Olist dosyaları depoda yok.
 
 ## Bilinen açıklar

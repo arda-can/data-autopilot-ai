@@ -193,3 +193,16 @@ def test_changed_file_content_refreshes_results(data_dir: Path, monkeypatch: pyt
     application.run()
     _ok(application)
     assert ("Satır Değişimi", "90 → 90") in [(item.label, item.value) for item in application.metric]
+
+
+def test_demo_button_loads_demo_dataset(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("AUTOPILOT_DATA_DIR", str(tmp_path))
+    application = AppTest.from_file(str(ROOT / "app.py"), default_timeout=TIMEOUT)
+    application.run()
+    application.sidebar.button(key="demo_button").click().run()
+    _ok(application)
+    assert (tmp_path / "demo_eticaret_siparisleri.csv").exists()
+    assert "🚀 Otopilot Yönetici Özeti" in [item.value for item in application.header]
+    application.switch_page(KALITE).run()
+    _ok(application)
+    assert any(item.value.startswith("tutar: 4 negatif değer") for item in application.warning)

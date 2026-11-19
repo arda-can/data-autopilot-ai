@@ -34,7 +34,10 @@ Gemini API anahtarı isteğe bağlıdır ve arayüzdeki kenar çubuğundan giril
 
 ## Veri
 
-Depoda yalnızca küçük bir örnek var: `data/kirli_musteri_verisi.csv`. Arayüzdeki "Örnek Kirli Türkçe Veri Üret ve Yükle" düğmesi de aynı dosyayı üretir.
+Depoda iki sentetik veri seti var; ikisi de gerçek kişi verisi içermez:
+
+- **`data/demo_eticaret_siparisleri.csv`** (kenar çubuğunda "Demo e-ticaret verisini yükle"): 2024–2025 arası 7.057 sipariş, 4.000 müşteri. `core/demo_data.py` sabit tohumla üretir ve hangi örüntülerin bilerek konduğunu belgeler: tekrar eden müşteriler (RFM ve kohort için), gecikmeye, kategoriye ve indirime bağlı iade ve puan (öğrenilebilir sinyal), 2025'in ikinci yarısında mobil kanala kayma, Ekim 2025'ten itibaren Ankara'da teslimat gecikmesi, Temmuz 2025'te başlayan müşteri bazlı bir A/B deneyi (öneri kutusu) ve sayısı kayıtlı kural ihlalleri (negatif tutar, 1'den büyük indirim oranı, siparişten önce teslim, 1–5 dışı puan, geçersiz e-posta, şehir yazım farkı, tekrarlanan sipariş numarası, mükerrer satır). Ad, e-posta ve telefon sütunları KVKK maskesini göstermek içindir.
+- **`data/kirli_musteri_verisi.csv`** ("Örnek Kirli Türkçe Veri Üret ve Yükle"): biçim temizliğini gösteren 200 satırlık küçük örnek.
 
 Daha büyük bir deneme için [Olist Brazilian E-Commerce](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) veri setini indirip CSV dosyalarını `data/` klasörüne koyun; uygulama onları otomatik listeler. Bu dosyalar boyutları nedeniyle depoya dahil değildir.
 
