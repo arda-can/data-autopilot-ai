@@ -118,10 +118,10 @@ else:
     st.warning(report.verdict)
 
 metric_scale = 100 if spec.metric_kind == "oran" else 1
-suffix = "%" if spec.metric_kind == "oran" else ""
+prefix = "%" if spec.metric_kind == "oran" else ""
 metrics = st.columns(4)
-metrics[0].metric(f"Kontrol ({report.control.label})", f"{decimal_tr(report.control.mean * metric_scale, 2)}{suffix}")
-metrics[1].metric(f"Deney ({report.treatment.label})", f"{decimal_tr(report.treatment.mean * metric_scale, 2)}{suffix}")
+metrics[0].metric(f"Kontrol ({report.control.label})", f"{prefix}{decimal_tr(report.control.mean * metric_scale, 2)}")
+metrics[1].metric(f"Deney ({report.treatment.label})", f"{prefix}{decimal_tr(report.treatment.mean * metric_scale, 2)}")
 metrics[2].metric(
     "Göreli fark", "—" if report.relative_lift is None else f"%{decimal_tr(report.relative_lift * 100)}",
     help="Güven aralığı yaklaşık; kontrol ortalamasının belirsizliğini yok sayar.",

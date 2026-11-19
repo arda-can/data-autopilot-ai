@@ -306,3 +306,14 @@ def test_experiment_page_and_report(monkeypatch: pytest.MonkeyPatch, tmp_path) -
     application.button(key="report_button").click().run()
     _ok(application)
     assert "<h2>A/B Testi</h2>" in application.session_state["report_files"]["html"].decode("utf-8")
+
+
+def test_demo_link_opens_with_demo_data(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Paylaşılan ?demo=1 bağlantısı tıklama gerektirmeden demo veriyle açılır."""
+    monkeypatch.setenv("AUTOPILOT_DATA_DIR", str(tmp_path))
+    application = AppTest.from_file(str(ROOT / "app.py"), default_timeout=TIMEOUT)
+    application.query_params["demo"] = "1"
+    application.run()
+    _ok(application)
+    assert application.session_state["data_name"] == "demo_eticaret_siparisleri.csv"
+    assert "🚀 Otopilot Yönetici Özeti" in [item.value for item in application.header]

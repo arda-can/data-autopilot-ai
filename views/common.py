@@ -90,6 +90,17 @@ def discover_tables(signature: tuple[tuple[str, int, int], ...]) -> tuple:
     return tables, finder.describe(tables), finder.discover(tables)
 
 
+# Sunucudaki dosyalardan (demo, data/ klasörü, örnek veri) gelen ve LLM kullanmayan sonuçlar oturumlar arasında
+# paylaşılır: imza dosya yolu ve değiştirilme zamanını içerir, dosya değişince yeniden hesaplanır. Yüklenen
+# dosyalar ve Gemini anahtarlı çalışmalar paylaşılmaz. Sonuç nesnesi hiçbir yerde yerinde değiştirilmez.
+SHARED_SOURCES = ("demo:", "local:", "sample:")
+
+
+@st.cache_resource(max_entries=4, show_spinner=False)
+def _shared_autopilot(signature: str, _frame: pd.DataFrame) -> AutopilotResult:
+    return AutopilotEngine().run_full_autopilot(_frame, api_key="")
+
+
 def require_result() -> AutopilotResult:
     """Otopilot sonucunu döndürür; veri yoksa ya da çoklu tablo henüz birleştirilmediyse sayfayı durdurur."""
     if st.session_state.get("work_mode", SINGLE_TABLE) != SINGLE_TABLE and not joined_active():
@@ -102,9 +113,12 @@ def require_result() -> AutopilotResult:
     if st.session_state.autopilot_result is None:
         with st.spinner("Otopilot veriyi temizliyor ve en mantıklı analizleri hazırlıyor..."):
             try:
-                st.session_state.autopilot_result = AutopilotEngine().run_full_autopilot(
-                    frame, api_key=st.session_state.get("api_key", "")
-                )
+                api_key = st.session_state.get("api_key", "")
+                signature = str(st.session_state.data_signature or "")
+                if not api_key and signature.startswith(SHARED_SOURCES):
+                    st.session_state.autopilot_result = _shared_autopilot(signature, frame)
+                else:
+                    st.session_state.autopilot_result = AutopilotEngine().run_full_autopilot(frame, api_key=api_key)
             except (ValueError, TypeError, KeyError) as exc:
                 st.error(f"Otopilot çalıştırılamadı: {exc}")
                 st.stop()

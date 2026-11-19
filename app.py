@@ -33,6 +33,20 @@ PAGES = [
 ]
 navigation = st.navigation(PAGES)
 
+
+def _load_demo() -> None:
+    path = data_directory() / DEMO_FILENAME
+    if not path.exists():
+        write_demo_data(path)
+    load_dataset(lambda: read_local_csv(path), f"demo:{path.stat().st_mtime_ns}", path.name)
+
+
+# Paylaşılabilir demo bağlantısı: ?demo=1 ile açılan oturum demo veriyle başlar (yalnızca ilk açılışta).
+if st.query_params.get("demo") == "1" and st.session_state.dataframe is None \
+        and not st.session_state.get("demo_autoloaded"):
+    st.session_state.demo_autoloaded = True
+    _load_demo()
+
 with st.sidebar:
     st.header("Veri Kaynağı")
     st.text_input(
@@ -53,10 +67,7 @@ with st.sidebar:
         "Demo e-ticaret verisini yükle", key="demo_button", width="stretch",
         help="Sentetik veri: tekrar eden müşteriler, PII sütunları, kural ihlalleri, 2025'te kayma ve bir A/B deneyi.",
     ):
-        path = data_directory() / DEMO_FILENAME
-        if not path.exists():
-            write_demo_data(path)
-        load_dataset(lambda: read_local_csv(path), f"demo:{path.stat().st_mtime_ns}", path.name)
+        _load_demo()
         st.rerun()
     if work_mode == SINGLE_TABLE and st.button("Örnek Kirli Türkçe Veri Üret ve Yükle", width="stretch"):
         path = generate_sample_dirty_data()

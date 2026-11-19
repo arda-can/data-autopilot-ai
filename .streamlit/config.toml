@@ -1,0 +1,12 @@
+# Yerel çalıştırma ve Streamlit Community Cloud için ortak ayarlar.
+[client]
+# Geliştirici menüsünü ve "Deploy" düğmesini gizler; ziyaretçi yalnızca uygulamayı görür.
+toolbarMode = "minimal"
+
+[theme]
+# Grafik renkleri açık tema için seçildi; tarayıcının koyu temasından bağımsız tutarlı görünüm.
+base = "light"
+primaryColor = "#1d5fd1"
+
+[browser]
+gatherUsageStats = false
