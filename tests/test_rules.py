@@ -111,6 +111,51 @@ def test_compliance_is_row_level_and_absent_without_rules(frame: pd.DataFrame) -
     assert records.iloc[0]["ihlal_edilen_kurallar"].count(";") == 1
 
 
+def test_repeated_alternation_pattern_is_rejected() -> None:
+    """Regresyon: (a|aa)+$ iç içe niceleyici süzgecinden geçiyor ve felaket geri izlemeyle arayüzü kilitliyordu."""
+    with pytest.raises(ValidationError, match="Tekrarlanan alternatif"):
+        DataRule(kind="desen", column="x", pattern="(a|aa)+$")
+    DataRule(kind="desen", column="x", pattern=r"(\+90|0)?5\d{9}")  # isteğe bağlı alternatif sorun değil
+
+
+def test_slow_custom_pattern_is_stopped_and_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Süzgeçten geçen ama yavaş bir desen (art arda niceleyiciler) süre sınırında durdurulur, hata olarak raporlanır."""
+    import time
+
+    import core.rules as rules_module
+
+    monkeypatch.setattr(rules_module, "PATTERN_TIMEOUT_SECONDS", 1.5)
+    frame = pd.DataFrame({"kod": ["1" * 3000, "123"]})
+    started = time.perf_counter()
+    report, matrix = evaluate_rules(frame, [DataRule(kind="desen", column="kod", pattern=r"\d*\d*\d*\d*\d*\d*!")])
+    assert time.perf_counter() - started < 15
+    assert "saniyede değerlendirilemedi" in report.results[0].error and report.compliance_score is None
+
+
+def test_custom_pattern_checks_the_whole_value() -> None:
+    """Regresyon: desen yalnızca ilk 256 karaktere uygulanıyordu; sondaki geçersiz karakter görülmüyordu."""
+    frame = pd.DataFrame({"kod": ["a" * 256 + "!", "a" * 300, "aa"]})
+    mask, checked = violation_mask(frame, DataRule(kind="desen", column="kod", pattern="a+"))
+    assert checked == 3 and mask.tolist() == [True, False, False]
+    long_email = "x" * 300 + "@ornek.com!"
+    mask, _ = violation_mask(pd.DataFrame({"e": [long_email]}), DataRule(kind="desen", column="e",
+                                                                          pattern=PATTERN_PRESETS["E-posta"]))
+    assert mask.tolist() == [True]
+
+
+def test_rules_with_the_same_description_do_not_overwrite_each_other() -> None:
+    """Regresyon: maskeler kısaltılmış açıklamayla tutuluyordu; ilk 8 değeri aynı iki kural birbirini eziyordu."""
+    first8 = [f"d{i}" for i in range(8)]
+    frame = pd.DataFrame({"x": ["d9", "d10"]})
+    rules = [DataRule(kind="izinli_değerler", column="x", values=[*first8, "d9"]),
+             DataRule(kind="izinli_değerler", column="x", values=[*first8, "d10"])]
+    assert rules[0].describe() == rules[1].describe()
+    report, matrix = evaluate_rules(frame, rules)
+    assert matrix.shape[1] == 2 and report.violating_rows == 2 and report.compliance_score == 0
+    labels = violating_records(frame, matrix)["ihlal_edilen_kurallar"].tolist()
+    assert labels[0] == rules[1].describe() + " (2)" and labels[1] == rules[0].describe()
+
+
 def test_rules_round_trip_through_json() -> None:
     rule = DataRule(kind="karşılaştırma", column="teslim", operator=">=", other_column="sipariş", reason="r")
     assert DataRule.model_validate_json(rule.model_dump_json()) == rule

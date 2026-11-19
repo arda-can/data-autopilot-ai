@@ -12,8 +12,11 @@ kayıtların payı. Kural tanımlanmadıysa skor yoktur; "100" uydurulmaz.
 
 from __future__ import annotations
 
+import json
 import operator
 import re
+import subprocess
+import sys
 from typing import Callable, Literal
 
 import pandas as pd
@@ -43,9 +46,19 @@ PATTERN_PRESETS: dict[str, str] = {
 _PRESET_PHRASES = {"E-posta": "e-posta", "Türkiye cep telefonu": "Türkiye cep telefonu",
                    "Posta kodu (5 hane)": "posta kodu (5 hane)"}
 MAX_PATTERN_LENGTH = 200
-MAX_TEXT_LENGTH = 256  # desen yalnızca değerin ilk 256 karakterine uygulanır
-# İç içe niceleyici ((a+)+ gibi) felaket geri izlemeye yol açar; bu biçim reddedilir.
+PATTERN_TIMEOUT_SECONDS = 5.0
+# Felaket geri izlemenin bilinen iki biçimi erkenden reddedilir: iç içe niceleyici ((a+)+) ve tekrarlanan
+# alternatif ((a|aa)+). Bu süzgeç yalnızca ilk savunmadır; asıl güvence, özel desenlerin ayrı bir süreçte süre
+# sınırıyla çalıştırılmasıdır (`_match_isolated`). Değerler kırpılmaz; uzun değerin tamamı denetlenir.
 _NESTED_QUANTIFIER = re.compile(r"\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]")
+_REPEATED_ALTERNATION = re.compile(r"\((?:[^()\\]|\\.)*\|(?:[^()\\]|\\.)*\)\s*[+*{]")
+# Ayrı süreçte çalışan eşleştirici: yalnızca standart kitaplık, -I (yalıtılmış) kipte.
+_MATCH_WORKER = (
+    "import json, re, sys\n"
+    "data = json.loads(sys.stdin.buffer.read().decode('utf-8'))\n"
+    "compiled = re.compile(data['pattern'])\n"
+    "sys.stdout.buffer.write(json.dumps([compiled.fullmatch(v) is not None for v in data['values']]).encode('utf-8'))\n"
+)
 _RATIO_TOKENS = frozenset({"oran", "oranı", "orani", "rate", "ratio"})
 _EMAIL_TOKENS = frozenset({"email", "eposta", "mail"})
 _PHONE_TOKENS = frozenset({"telefon", "tel", "phone", "gsm", "cep"})
@@ -84,6 +97,9 @@ class DataRule(BaseModel):
                 raise ValueError(f"Desen en fazla {MAX_PATTERN_LENGTH} karakter olabilir.")
             if _NESTED_QUANTIFIER.search(self.pattern):
                 raise ValueError("İç içe niceleyici içeren desenler (ör. (a+)+) yavaşlamaya yol açtığı için kabul edilmez.")
+            if _REPEATED_ALTERNATION.search(self.pattern):
+                raise ValueError("Tekrarlanan alternatif içeren desenler (ör. (a|aa)+) yavaşlamaya yol açtığı için "
+                                 "kabul edilmez; alternatifleri karakter sınıfıyla yazın (ör. [ab]+).")
             try:
                 re.compile(self.pattern)
             except re.error as exc:
@@ -193,6 +209,25 @@ def check_rule(frame: pd.DataFrame, rule: DataRule) -> str:
     return ""
 
 
+def _match_isolated(pattern: str, values: list[str]) -> list[bool]:
+    """Özel deseni ayrı bir Python sürecinde süre sınırıyla uygular. `re` iş parçacığı içinde kesilemediği için
+    yavaş bir desen arayüzü kilitleyemesin diye süreç süre dolunca sonlandırılır ve kural hata olarak raporlanır."""
+    payload = json.dumps({"pattern": pattern, "values": values}).encode("utf-8")
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", _MATCH_WORKER], input=payload, capture_output=True,
+            timeout=PATTERN_TIMEOUT_SECONDS, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(
+            f"Desen {PATTERN_TIMEOUT_SECONDS:g} saniyede değerlendirilemedi ve durduruldu; deseni sadeleştirin "
+            "(art arda niceleyicileri ve geniş alternatifleri azaltın)."
+        ) from exc
+    if completed.returncode != 0:
+        raise ValueError("Desen değerlendirilemedi: " + completed.stderr.decode("utf-8", "replace").strip()[-200:])
+    return json.loads(completed.stdout.decode("utf-8"))
+
+
 def violation_mask(frame: pd.DataFrame, rule: DataRule) -> tuple[pd.Series, int]:
     """(ihlal maskesi, kontrol edilen kayıt sayısı). Kural uygulanamıyorsa ValueError."""
     reason = check_rule(frame, rule)
@@ -215,8 +250,14 @@ def violation_mask(frame: pd.DataFrame, rule: DataRule) -> tuple[pd.Series, int]
         allowed = set(rule.values)
         return present & ~series.astype(str).isin(allowed), int(present.sum())
     if rule.kind == "desen":
-        compiled = re.compile(rule.pattern)
-        matches = series[present].astype(str).str.slice(0, MAX_TEXT_LENGTH).map(lambda text: bool(compiled.fullmatch(text)))
+        texts = series[present].astype(str)
+        unique = list(dict.fromkeys(texts))
+        if rule.pattern in PATTERN_PRESETS.values():
+            compiled = re.compile(rule.pattern)
+            outcome = [compiled.fullmatch(text) is not None for text in unique]
+        else:
+            outcome = _match_isolated(rule.pattern, unique)
+        matches = texts.map(dict(zip(unique, outcome))).astype(bool)
         return present & ~matches.reindex(frame.index, fill_value=True), int(present.sum())
     left, right = _comparable(frame, rule)
     both = left.notna() & right.notna()
@@ -228,7 +269,10 @@ def violation_mask(frame: pd.DataFrame, rule: DataRule) -> tuple[pd.Series, int]
 def evaluate_rules(frame: pd.DataFrame, rules: list[DataRule]) -> tuple[RuleReport, pd.DataFrame]:
     """(rapor, kayıt × kural ihlal matrisi). Uygulanamayan kural hata metniyle raporlanır, sessizce atlanmaz."""
     results: list[RuleResult] = []
+    # Maskeler kuralın içerik anahtarıyla tutulur: açıklama kısaltılmış olabilir (ör. ilk 8 izinli değer) ve iki
+    # farklı kural aynı açıklamayı paylaşabilir. Sütun etiketi yalnızca indirilecek tablo için tekilleştirilir.
     masks: dict[str, pd.Series] = {}
+    labels: dict[str, str] = {}
     for rule in rules:
         description = rule.describe()
         try:
@@ -237,7 +281,12 @@ def evaluate_rules(frame: pd.DataFrame, rules: list[DataRule]) -> tuple[RuleRepo
             results.append(RuleResult(rule=rule, description=description, error=str(exc)))
             continue
         violations = int(mask.sum())
-        masks[description] = mask
+        if rule.key not in labels:
+            label, number = description, 2
+            while label in labels.values():
+                label, number = f"{description} ({number})", number + 1
+            labels[rule.key] = label
+        masks[labels[rule.key]] = mask
         results.append(RuleResult(
             rule=rule, description=description, checked=checked, violations=violations,
             compliance=1 - violations / checked if checked else None,
