@@ -4,8 +4,8 @@ Kullanım (proje kökünden):  .venv\\Scripts\\python.exe scripts\\demo_capture.
 
 Yerel bir Streamlit sunucusu başlatır, Chrome'u başsız açar ve DevTools protokolüyle (websocket-client) demo
 akışını gezer: `?demo=1` bağlantısı, Kalite, Zaman Serisi ("Neden Değişti?"), Model, Müşteri, Deney.
-Görüntüler `docs/ekranlar/`, GIF `docs/demo.gif` olarak yazılır. Yeni bağımlılık gerektirmez
-(websocket-client ve Pillow zaten kurulu). Chrome yolu `CHROME` ortam değişkeniyle değiştirilebilir.
+Görüntüler `docs/ekranlar/`, GIF `docs/demo.gif` olarak yazılır. Bağımlılıkları (websocket-client, Pillow)
+`requirements-dev.txt` içinde sabittir. Chrome yolu `CHROME` ortam değişkeniyle değiştirilebilir.
 """
 
 from __future__ import annotations

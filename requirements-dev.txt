@@ -1,2 +1,5 @@
 -r requirements.txt
 pytest==9.2.0
+# scripts/demo_capture.py (README GIF'i): Chrome DevTools istemcisi ve GIF yazımı
+websocket-client==1.9.2
+pillow==12.3.0
