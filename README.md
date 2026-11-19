@@ -87,7 +87,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-372 test; bunların 14'ü Streamlit AppTest ile uçtan uca arayüz testidir. Testler sentetik veriyle çalışır ve API anahtarı kullanmaz: Gemini yolları sahte SDK yanıtlarıyla sınanır.
+381 test; bunların 14'ü Streamlit AppTest ile uçtan uca arayüz testidir. Testler sentetik veriyle çalışır ve API anahtarı kullanmaz: Gemini yolları sahte SDK yanıtlarıyla sınanır.
 
 README'deki GIF ve ekran görüntüleri `scripts/demo_capture.py` ile yeniden üretilir: yerel sunucuyu başlatır, Chrome'u başsız açıp demo akışını gezer.
 

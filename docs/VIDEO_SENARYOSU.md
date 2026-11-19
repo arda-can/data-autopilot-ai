@@ -22,7 +22,7 @@
 | 2:00–2:25 | **Müşteri** sayfası: RFM grafiği ve tablo, kohort ısı haritası | "Müşteri tarafında RFM segmentleri ve her segment için önerilen aksiyon var. 'Kaybedilmemeli' segmenti müşterilerin yüzde 6'sı ama gelirin yüzde 10'u. Kohort tablosunda henüz gözlenemeyen aylar boş bırakılıyor, sıfır sayılmıyor; aksi hâlde tutundurma olduğundan kötü görünürdü." |
 | 2:25–2:55 | **Deney** sayfası: "Deneyi analiz et"; yeşil hüküm, SRM satırı, güç bölümü | "Son olarak A/B testi. Atama müşteri bazında yapılmış, bu yüzden analiz de müşteri düzeyinde; aynı müşterinin siparişleri bağımsız sayılmıyor. B grubunda ek ürün oranı yüzde 34 daha yüksek, p 0,007. Örneklem oranı uyumu kontrolü temiz. Sonuç anlamsız çıksaydı, kaç kullanıcı gerektiğini söyleyecekti." |
 | 2:55–3:15 | **Rapor** sayfası: "Raporu Hazırla" → PDF'i açıp ilk sayfayı gösterin | "Bütün bunlar tek tıkla HTML ve PDF yönetici raporuna dönüşüyor. Rapora ham satır ya da müşteri kimliği girmiyor." |
-| 3:15–3:30 | GitHub deposu: README ve yeşil CI rozeti | "Kod GitHub'da: 370'ten fazla test ve CI var. Mimari kural basit: LLM yalnızca plan yapar, hiçbir yerde eval yok, kişisel veri LLM'e gitmez. İzlediğiniz için teşekkürler." |
+| 3:15–3:30 | GitHub deposu: README ve yeşil CI rozeti | "Kod GitHub'da: 380'den fazla test ve CI var. Mimari kural basit: LLM yalnızca plan yapar, hiçbir yerde eval yok, kişisel veri LLM'e gitmez. İzlediğiniz için teşekkürler." |
 
 ## Çekim ipuçları
 

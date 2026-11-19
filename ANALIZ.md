@@ -16,7 +16,7 @@ Bir CSV/Excel dosyası ya da `data/` klasöründeki birbirine bağlı tablolar v
 - Türkçe sorulara filtre ve tarih kırılımıyla cevap verir, her cevabın eşdeğer pandas ve SQL kodunu gösterir;
 - bunların tümünü HTML ve PDF yönetici raporuna koyar.
 
-**Test ve CI:** 372 test (pytest), bunların 14'ü Streamlit AppTest ile uçtan uca arayüz testi (çoğu `tests/test_app_e2e.py`). GitHub Actions her push'ta Python 3.13 ile çalıştırır. Bağımlılık sürümleri `requirements.txt` içinde sabit.
+**Test ve CI:** 381 test (pytest), bunların 14'ü Streamlit AppTest ile uçtan uca arayüz testi (çoğu `tests/test_app_e2e.py`). GitHub Actions her push'ta Python 3.13 ile çalıştırır. Bağımlılık sürümleri `requirements.txt` içinde sabit.
 
 ## 2. Güncel mimari
 
@@ -75,7 +75,7 @@ flowchart TD
 | Y2 — pandas 3 dtype, sürümsüz bağımlılıklar | ✅ | `is_text_series`; sürümler sabit |
 | Y3 — "id" alt dizesi | ✅ | `is_identifier_name`, kelime eşleşmesi |
 | Y4 — LLM planına korkuluk ve hata görünürlüğü | ◐ | JSON yolu düzeltildi, hatalar ve plan kaynağı görünür, veri koruma kontrolü var; Gemini gerçek anahtarla test edilmedi (sahte SDK testleri var) |
-| Y5 — test, git, README, CI | ✅ | 372 test, GitHub Actions |
+| Y5 — test, git, README, CI | ✅ | 381 test, GitHub Actions |
 | Y6 — yanıltıcı AutoML sonuçları | ✅ | Taban model, çapraz doğrulamayla seçim, ayrı test, zaman bölmesi, tahmin anı, sızıntı uyarısı |
 | O1 — alan kuralları | ✅ | `core/rules.py`: altı sınırlı kural türü, veriden öneri, Gemini önerisi (şema + veri doğrulaması), ihlal indirme |
 | O2 — audit örnekleri | ✅ | Değişen satırlardan, satır numaralarıyla |
