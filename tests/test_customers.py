@@ -69,6 +69,33 @@ def test_invalid_amounts_are_excluded_and_orders_merged() -> None:
     assert transactions[["customer", "amount"]].values.tolist() == [["A", 150.0]]
 
 
+def test_shared_order_numbers_keep_revenue_with_each_customer() -> None:
+    """Regresyon: sipariş yalnızca numarayla gruplanıp ilk müşteriye yazılıyordu; boş numaralı kayıt sessizce düşüyordu."""
+    frame = _frame([("A", "2025-01-01", 100), ("B", "2025-01-02", 70), ("B", "2025-01-02", 30),
+                    ("C", "2025-01-05", 40)])
+    frame["sipariş_no"] = ["S1", "S1", "S1", None]
+    columns = COLUMNS.model_copy(update={"order": "sipariş_no"})
+    transactions, excluded = transactions_from(frame, columns)
+    assert excluded == 0
+    assert sorted(transactions[["customer", "amount"]].values.tolist()) == [["A", 100.0], ["B", 100.0], ["C", 40.0]]
+    assert transactions["amount"].sum() == frame["tutar"].sum()
+    frame = pd.concat([frame] + [_frame([(f"M{i}", "2025-02-01", 10)]) for i in range(3)], ignore_index=True)
+    notes = CustomerAnalyzer().analyze(frame, columns).summary.notes
+    assert any("1 sipariş numarası birden fazla müşteride" in note for note in notes)
+
+
+def test_demo_revenue_is_fully_attributed(demo_result: AutopilotResult) -> None:
+    cleaned = demo_result.cleaned_frame
+    columns = detect_customer_columns(cleaned)
+    assert columns is not None and columns.order is not None
+    transactions, excluded = transactions_from(cleaned, columns)
+    valid = cleaned[columns.customer].notna() & cleaned[columns.date].notna() & (cleaned[columns.amount] > 0)
+    assert excluded == int((~valid).sum())
+    expected = cleaned[valid].groupby(cleaned[columns.customer].astype(str))[columns.amount].sum()
+    actual = transactions.groupby("customer")["amount"].sum()
+    pd.testing.assert_series_equal(actual.sort_index(), expected.sort_index(), check_names=False)
+
+
 def test_cohort_retention_leaves_unobserved_cells_empty() -> None:
     frame = _frame([
         ("A", "2025-01-05", 10), ("A", "2025-02-07", 10),

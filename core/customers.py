@@ -3,7 +3,8 @@
 Tanımlar (arayüzde ve raporda aynen yazılır):
 
 - İşlem: müşteri, tarih ve tutarı dolu, tutarı sıfırdan büyük kayıt. Sipariş numarası sütunu verilirse
-  aynı siparişin satırları tek işlem sayılır (tutar toplanır). Tutarı boş/sıfır/negatif kayıtlar
+  aynı müşterinin aynı siparişteki satırları tek işlem sayılır (tutar toplanır); aynı numara farklı
+  müşterilerde görünürse gelir karıştırılmaz ve durum not edilir. Tutarı boş/sıfır/negatif kayıtlar
   (iade, iptal ya da hatalı giriş olabilir) hesaba girmez ve sayısı not edilir.
 - Analiz tarihi: verideki son işlem gününden bir gün sonrası. Yakınlık bu tarihe göre ölçülür.
 - RFM: Yakınlık (son işlemden bu yana gün), Sıklık (işlem sayısı), Parasal (toplam tutar), seçilen
@@ -58,8 +59,9 @@ SEGMENT_ORDER = [name for _, name, _ in SEGMENT_RULES]
 SEGMENT_ACTIONS = {name: action for _, name, action in SEGMENT_RULES}
 
 DEFINITIONS = {
-    "işlem": "Müşteri, tarih ve tutarı dolu, tutarı sıfırdan büyük kayıt; sipariş numarası verilirse sipariş başına "
-             "tek işlem. Boş/sıfır/negatif tutarlı kayıtlar hesaba girmez.",
+    "işlem": "Müşteri, tarih ve tutarı dolu, tutarı sıfırdan büyük kayıt; sipariş numarası verilirse müşteri ve "
+             "sipariş başına tek işlem (numarası boş kayıt tek başına işlemdir). Boş/sıfır/negatif tutarlı kayıtlar "
+             "hesaba girmez.",
     "rfm": "Yakınlık = analiz tarihine (son işlem günü + 1) kalan gün; Sıklık = işlem sayısı; Parasal = toplam tutar. "
            "Skorlar 1–5 yüzdelik dilim; eşit değerler aynı skoru alır. Segment, yakınlık ve sıklık skorlarından atanır.",
     "kohort": "Kohort = ilk işlem ayı (tüm veri). k. ay tutundurma = kohorttan ilk işleminden k takvim ayı sonra en az "
@@ -171,13 +173,16 @@ def transactions_from(frame: pd.DataFrame, columns: CustomerColumns) -> tuple[pd
     data = frame[selected].copy()
     valid = data[columns.customer].notna() & data[columns.date].notna() & (data[columns.amount] > 0)
     excluded = int((~valid).sum())
-    data = data[valid]
+    data = data[valid].rename(columns={columns.customer: "customer", columns.date: "date", columns.amount: "amount"})
     if columns.order:
-        data = data.groupby(columns.order, sort=False).agg(
-            customer=(columns.customer, "first"), date=(columns.date, "min"), amount=(columns.amount, "sum"),
-        ).reset_index(drop=True)
-    else:
-        data = data.rename(columns={columns.customer: "customer", columns.date: "date", columns.amount: "amount"})
+        # Sipariş, müşteri ile birlikte gruplanır: aynı numara iki müşteride görünürse (hatalı veri) gelir ilk
+        # müşteriye yazılmaz, her müşterinin kendi payı ayrı işlem olur. Numarası boş kayıt tek başına işlemdir.
+        has_order = data[columns.order].notna()
+        merged = data[has_order].groupby(["customer", columns.order], sort=False).agg(
+            date=("date", "min"), amount=("amount", "sum"),
+        ).reset_index()
+        data = pd.concat([merged, data[~has_order]], ignore_index=True)[["customer", "date", "amount"]]
+        data = data.sort_values("date", kind="stable")
     data["customer"] = data["customer"].astype(str)
     if data.empty:
         raise ValueError("Müşteri, tarih ve pozitif tutarı birlikte dolu kayıt yok.")
@@ -359,6 +364,12 @@ class CustomerAnalyzer:
         notes: list[str] = []
         if excluded:
             notes.append(f"{excluded} kayıt müşteri/tarih eksik ya da tutarı sıfır veya negatif olduğu için hesaba girmedi.")
+        if columns.order:
+            orders = frame.loc[frame[columns.order].notna() & frame[columns.customer].notna()]
+            shared = int((orders.groupby(columns.order)[columns.customer].nunique() > 1).sum())
+            if shared:
+                notes.append(f"{shared} sipariş numarası birden fazla müşteride görünüyor; her müşterinin payı ayrı "
+                             "işlem sayıldı.")
         last = transactions["date"].max()
         if last.normalize() < (last + pd.offsets.MonthEnd(0)).normalize():
             notes.append(f"Son ay ({last:%m.%Y}) {last.day}. güne kadar gözlendi; son sütunlardaki tutundurma eksik ayı içerir.")

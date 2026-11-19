@@ -252,7 +252,7 @@ def test_customer_page_and_report(monkeypatch: pytest.MonkeyPatch, tmp_path) -> 
     application.switch_page("views/musteri.py").run()
     _ok(application)
     metrics = {item.label: item.value for item in application.metric}
-    assert metrics["Müşteri"] == "3.996" and metrics["Tekrar Eden Müşteri"].startswith("%40")
+    assert metrics["Müşteri"] == "3.998" and metrics["Tekrar Eden Müşteri"].startswith("%40")
     assert application.selectbox(key="cust_customer").value == "müşteri_no"
     application.selectbox(key="cust_window").select("Son 6 ay").run()
     application.selectbox(key="cust_group").select("kanal").run()
