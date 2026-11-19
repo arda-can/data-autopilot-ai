@@ -24,6 +24,7 @@ from core.formatting import decimal_tr, integer_tr, localize_figure
 from core.timeseries import TimeSeriesSummary, format_period
 from core.customers import CustomerSummary
 from core.drift import DriftReport
+from core.rootcause import RootCauseReport
 from core.rules import RuleReport
 from core.executor import RejectedAction
 from core.explain import PDP_NOTE, ModelExplanation, PartialDependence
@@ -108,6 +109,7 @@ class ExecutiveReport(BaseModel):
     drift: DriftReport | None = None
     rules: RuleReport | None = None
     customers: CustomerSummary | None = None
+    root_cause: RootCauseReport | None = None
     pdp: list[PartialDependence] = Field(default_factory=list)
     join_logs: list[JoinLog] = Field(default_factory=list)
     plan_origin: PlanOrigin | None = None
@@ -195,6 +197,7 @@ def build_report(
     join_logs: list[JoinLog] | None = None,
     rules: RuleReport | None = None,
     customers: CustomerSummary | None = None,
+    root_cause: RootCauseReport | None = None,
 ) -> ExecutiveReport:
     """Otopilot sonucundan JSON'a çevrilebilir, sunuma hazır yönetici raporu üretir."""
     before, after = result.before_report, result.after_report
@@ -243,6 +246,8 @@ def build_report(
             f"Dönem karşılaştırması ({drift.reference_label} → {drift.current_label}): "
             f"{drift.counts['kırmızı']} kırmızı, {drift.counts['sarı']} sarı, {drift.counts['yeşil']} yeşil sütun."
         )
+    if root_cause is not None:
+        headline.append(root_cause.headline)
     headline.append(model.verdict if model else (result.automl_message or "Tahmin modeli eğitilmedi."))
     if model and model.leakage_warnings:
         headline.append(
@@ -366,6 +371,7 @@ def build_report(
         drift=drift,
         rules=rules,
         customers=customers,
+        root_cause=root_cause,
         pdp=list(explanation.curves) if explanation is not None else [],
         join_logs=list(join_logs or []),
         plan_origin=result.plan_origin,
@@ -483,6 +489,21 @@ def _tables(report: ExecutiveReport) -> dict[str, tuple[list[str], list[list[str
               "—" if row.revenue_per_customer is None else _num(round(row.revenue_per_customer, 2)),
               "—" if row.orders_per_customer is None else _dec(row.orders_per_customer, 2)]
              for row in report.customers.clv],
+        )
+    if report.root_cause is not None and report.root_cause.dimensions:
+        cause = report.root_cause
+        tables["root_dimensions"] = (
+            ["Boyut", "Beklenenden sapma", "Özet"],
+            [[item.dimension, _dec(item.score, 2), item.summary] for item in cause.dimensions[:8]],
+        )
+        tables["root_groups"] = (
+            ["Grup", "Referans", "Güncel", "Katkı", "Değişimdeki pay", "Beklenen pay"],
+            [[item.group,
+              "—" if item.reference_value is None else _num(round(item.reference_value, 3)),
+              "—" if item.current_value is None else _num(round(item.current_value, 3)),
+              _num(round(item.contribution, 3)), _pct(item.share_of_change),
+              _pct(item.expected / cause.change) if cause.change else "—"]
+             for item in cause.dimensions[0].groups[:10]],
         )
     if report.drift and report.drift.columns:
         changed = [item for item in report.drift.columns if item.status != "yeşil"] or report.drift.columns[:5]
@@ -622,6 +643,18 @@ def render_html(
         parts.append("<section><h2>İş Kuralı Uyumu</h2>")
         parts.append(_html_table(*tables["rules"]))
         parts.append(f'<p class="note" style="margin-top:8px">{escape(report.rules.method_note)}</p></section>')
+
+    if report.root_cause is not None:
+        cause = report.root_cause
+        parts.append("<section><h2>Neden Değişti?</h2>")
+        parts.append(f"<p>{escape(cause.headline)}</p>")
+        if "root_dimensions" in tables:
+            parts.append(_html_table(*tables["root_dimensions"]))
+            parts.append(f'<h3 style="margin-top:16px">“{escape(cause.dimensions[0].dimension)}” grupları</h3>'
+                         + _html_table(*tables["root_groups"]))
+        parts.extend(f'<p class="note" style="margin-top:8px">{escape(item)}</p>'
+                     for item in [*cause.skipped, cause.method_note])
+        parts.append("</section>")
 
     if report.customers is not None:
         parts.append("<section><h2>Müşteri Analizi</h2>")
@@ -900,6 +933,17 @@ def render_pdf(
             table(*tables["rules"], widths=[0.52, 0.12, 0.12, 0.12, 0.12]),
             para(report.rules.method_note, note),
         ]
+
+    if report.root_cause is not None:
+        cause = report.root_cause
+        story += [para("Neden Değişti?", h2), para(cause.headline)]
+        if "root_dimensions" in tables:
+            story += [
+                table(*tables["root_dimensions"], widths=[0.18, 0.14, 0.68]),
+                para(f"“{cause.dimensions[0].dimension}” grupları", h3),
+                table(*tables["root_groups"], widths=[0.24, 0.14, 0.14, 0.16, 0.16, 0.16]),
+            ]
+        story += [para(item, note) for item in [*cause.skipped, cause.method_note]]
 
     if report.customers is not None:
         story += [para("Müşteri Analizi", h2), *bullets(_customer_facts(report.customers)),

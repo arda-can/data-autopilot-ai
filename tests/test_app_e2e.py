@@ -265,3 +265,24 @@ def test_customer_page_and_report(monkeypatch: pytest.MonkeyPatch, tmp_path) -> 
     _ok(application)
     page = application.session_state["report_files"]["html"].decode("utf-8")
     assert "<h2>Müşteri Analizi</h2>" in page and "RFM penceresi: Son 6 ay" in page
+
+
+def test_root_cause_section_and_report(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("AUTOPILOT_DATA_DIR", str(tmp_path))
+    application = AppTest.from_file(str(ROOT / "app.py"), default_timeout=TIMEOUT)
+    application.run()
+    application.sidebar.button(key="demo_button").click().run()
+    application.switch_page(ZAMAN).run()
+    _ok(application)
+    assert "🔎 Neden Değişti?" in [item.value for item in application.header]
+    assert str(application.date_input(key="rc_cur_start").value) == "2025-10-01"
+    application.selectbox(key="rc_kind").select("Ortalama").run()
+    application.selectbox(key="rc_column").select("değerlendirme_puanı").run()
+    application.button(key="rc_button").click().run()
+    _ok(application)
+    assert any("en büyük katkı “Ankara”" in item.value for item in application.success)
+    application.switch_page(RAPOR).run()
+    application.button(key="report_button").click().run()
+    _ok(application)
+    page = application.session_state["report_files"]["html"].decode("utf-8")
+    assert "<h2>Neden Değişti?</h2>" in page

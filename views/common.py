@@ -153,6 +153,14 @@ def stored_drift(request: tuple | None):
     return None
 
 
+def stored_root_cause(request: tuple | None):
+    """Bu veri ve bu istek için yapılmış kök neden ayrıştırması (sonuç ya da hata metni); yoksa None."""
+    stored = st.session_state.get("root_cause_result")
+    if request is not None and stored and stored[0] == st.session_state.data_signature and stored[1] == request:
+        return stored[2]
+    return None
+
+
 # --- İş kuralları -------------------------------------------------------------------------------
 
 def rule_id(rule: DataRule) -> str:

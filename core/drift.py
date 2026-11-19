@@ -156,6 +156,21 @@ def split_by_years(
     return frame[years == reference_year], frame[years == current_year], str(reference_year), str(current_year)
 
 
+def split_by_ranges(
+    frame: pd.DataFrame, date_column: str, reference: tuple[str, str], current: tuple[str, str],
+) -> tuple[pd.DataFrame, pd.DataFrame, str, str]:
+    """İki tarih aralığını (başlangıç ve bitiş günü dahil) karşılaştırır: ör. üçüncü çeyrek ile dördüncü çeyrek."""
+    dates = _dates(frame, date_column).dt.normalize()
+    parts, labels = [], []
+    for start, end in (reference, current):
+        start, end = pd.Timestamp(start), pd.Timestamp(end)
+        if start > end:
+            raise ValueError("Dönem başlangıcı bitişinden sonra olamaz.")
+        parts.append(frame[(dates >= start) & (dates <= end)])
+        labels.append(f"{start:%d.%m.%Y} – {end:%d.%m.%Y}")
+    return parts[0], parts[1], labels[0], labels[1]
+
+
 def _dates(frame: pd.DataFrame, date_column: str) -> pd.Series:
     if date_column not in frame.columns or not pd.api.types.is_datetime64_any_dtype(frame[date_column]):
         raise ValueError(f"'{date_column}' bir tarih sütunu değil.")
